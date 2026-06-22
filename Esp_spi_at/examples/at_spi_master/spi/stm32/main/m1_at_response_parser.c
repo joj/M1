@@ -237,8 +237,9 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 				break;
 
 			case CTRL_RESP_BLE_GATT_PRIMSRV:
-				/* +BLEGATTCPRIMSRV:<idx>,<srv_idx>,"<uuid>",<srv_type>
-				 * Multiple lines per response.
+				/* +BLEGATTCPRIMSRV:<idx>,<srv_idx>,<uuid>,<srv_type>
+				 * NOTE: ESP-AT does NOT quote the UUID here (e.g. 0x1800).
+				 * Older revisions / forks may quote it, so accept both.
 				 */
 				gatt_srv_count_before = app_resp->u.ble_srv_list.count;
 				{
@@ -249,9 +250,7 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 						if (!line) break;
 						char *eol = strstr(line, "\r\n");
 						if (!eol) eol = line + strlen(line);
-						/* skip past resp_key */
 						char *p = line + strlen(resp_key);
-						/* parse: idx,srv_idx,"uuid",srv_type */
 						(void)strtol(p, &p, 10);     /* conn_idx, ignored */
 						if (*p == ',') p++;
 						int srv_idx = (int)strtol(p, &p, 10);
@@ -269,6 +268,17 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 								p = q + 1;
 							}
 						}
+						else
+						{
+							/* Unquoted: copy until comma or EOL. */
+							char *q = p;
+							while (q < eol && *q != ',') q++;
+							size_t n = (size_t)(q - p);
+							if (n >= sizeof(uuid)) n = sizeof(uuid) - 1;
+							memcpy(uuid, p, n);
+							uuid[n] = '\0';
+							p = q;
+						}
 						if (*p == ',') p++;
 						int srv_type = (int)strtol(p, &p, 10);
 
@@ -280,7 +290,6 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 						e->srv_type = srv_type;
 						snprintf(e->uuid, sizeof(e->uuid), "%s", uuid);
 						app_resp->u.ble_srv_list.count++;
-						/* advance past this line */
 						index = eol;
 					}
 					app_resp->u.ble_srv_list.out_list = list;
@@ -290,8 +299,9 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 				break;
 
 			case CTRL_RESP_BLE_GATT_CHAR:
-				/* +BLEGATTCCHAR:<idx>,"char",<srv_idx>,<char_idx>,"<uuid>",<props>
-				 * +BLEGATTCCHAR:<idx>,"desc",<srv_idx>,<char_idx>,<desc_idx>,"<uuid>"
+				/* +BLEGATTCCHAR:<idx>,"char",<srv_idx>,<char_idx>,<uuid>,<props>
+				 * +BLEGATTCCHAR:<idx>,"desc",<srv_idx>,<char_idx>,<desc_idx>,<uuid>
+				 * NOTE: the "char"/"desc" tag is quoted, but the UUID is NOT.
 				 * Only "char" lines are captured.
 				 */
 				gatt_char_count_before = app_resp->u.ble_char_list.count;
@@ -306,7 +316,7 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 						char *p = line + strlen(resp_key);
 						(void)strtol(p, &p, 10); /* conn_idx, ignored */
 						if (*p == ',') p++;
-						/* type "char" or "desc" */
+						/* type "char" or "desc" — always quoted. */
 						bool is_char = false;
 						if (*p == '"')
 						{
@@ -340,6 +350,17 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 								p = q + 1;
 							}
 						}
+						else
+						{
+							/* Unquoted: copy until comma or EOL. */
+							char *q = p;
+							while (q < eol && *q != ',') q++;
+							size_t n = (size_t)(q - p);
+							if (n >= sizeof(uuid)) n = sizeof(uuid) - 1;
+							memcpy(uuid, p, n);
+							uuid[n] = '\0';
+							p = q;
+						}
 						if (*p == ',') p++;
 						int props = (int)strtol(p, &p, 10);
 
@@ -364,20 +385,29 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 				break;
 
 			case CTRL_RESP_BLE_GATT_READ:
-				/* +BLEGATTCRD:<idx>,<len>,<value_hex> */
+				/* +BLEGATTCRD:<idx>,<len>,<data>
+				 * <data> is raw bytes of length <len> (NOT hex) and may
+				 * contain CR/LF; we must use the length, not search for EOL.
+				 */
 				{
 					char *p = strchr(index, ',');
 					if (p)
 					{
 						p++;
-						int len = (int)strtol(p, &p, 10);
+						long len = strtol(p, &p, 10);
 						if (*p == ',') p++;
-						char *eol = strstr(p, "\r\n");
-						size_t hex_len = eol ? (size_t)(eol - p) : strlen(p);
-						if (hex_len >= sizeof(app_resp->u.ble_read.value_hex))
-							hex_len = sizeof(app_resp->u.ble_read.value_hex) - 1;
-						memcpy(app_resp->u.ble_read.value_hex, p, hex_len);
-						app_resp->u.ble_read.value_hex[hex_len] = '\0';
+						if (len < 0) len = 0;
+						if (len > 64) len = 64;  /* M1_BLE_GATT_VALUE_HEX_LEN/2 - 1 */
+						/* Format raw bytes as lowercase hex. */
+						static const char H[] = "0123456789abcdef";
+						uint16_t out = 0;
+						for (long i = 0; i < len && (size_t)(out + 1) < sizeof(app_resp->u.ble_read.value_hex); i++)
+						{
+							uint8_t b = (uint8_t)p[i];
+							app_resp->u.ble_read.value_hex[out++] = H[(b >> 4) & 0xF];
+							app_resp->u.ble_read.value_hex[out++] = H[b & 0xF];
+						}
+						app_resp->u.ble_read.value_hex[out] = '\0';
 						app_resp->u.ble_read.value_len = (uint16_t)len;
 						gatt_added_or_updated = 1;
 					}

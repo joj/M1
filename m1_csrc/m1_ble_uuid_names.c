@@ -182,6 +182,11 @@ void m1_ble_uuid_describe(const char *uuid_str, bool is_characteristic,
                           char *out, size_t out_size)
 {
     if (!out || out_size == 0) return;
+    if (!uuid_str || !*uuid_str)
+    {
+        snprintf(out, out_size, "?");
+        return;
+    }
     bool is_short = false;
     uint16_t u16 = m1_ble_uuid16_from_str(uuid_str, &is_short);
     const char *name = NULL;
@@ -193,11 +198,8 @@ void m1_ble_uuid_describe(const char *uuid_str, bool is_characteristic,
         snprintf(out, out_size, "%s", name);
     else if (is_short)
         snprintf(out, out_size, "0x%04X", (unsigned)u16);
-    else if (uuid_str)
-    {
-        /* Truncated 128-bit form: show the first 8 chars of the value. */
-        snprintf(out, out_size, "%.8s...", uuid_str);
-    }
+    else if (strlen(uuid_str) >= 8)
+        snprintf(out, out_size, "%.8s..", uuid_str);
     else
-        snprintf(out, out_size, "?");
+        snprintf(out, out_size, "%s", uuid_str);
 }

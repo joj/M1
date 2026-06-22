@@ -49,58 +49,80 @@ int main(void)
         EXPECT(app.u.ble_conn.connect_status == 12, "BLECONN failure status=12");
     }
 
-    /* ---- +BLEGATTCPRIMSRV parsing (multiple records) ---- */
+    /* ---- +BLEGATTCPRIMSRV parsing (unquoted UUIDs, real ESP-AT format) ---- */
     {
         ctrl_cmd_t app = {0};
         app.msg_id = CTRL_RESP_BLE_GATT_PRIMSRV;
         char r[] =
-            "+BLEGATTCPRIMSRV:0,1,\"0x1800\",0\r\n"
-            "+BLEGATTCPRIMSRV:0,2,\"0x180A\",0\r\n"
-            "+BLEGATTCPRIMSRV:0,3,\"0000fe9f-0000-1000-8000-00805f9b34fb\",0\r\n";
+            "+BLEGATTCPRIMSRV:0,1,0x1800,1\r\n"
+            "+BLEGATTCPRIMSRV:0,2,0x180A,1\r\n"
+            "+BLEGATTCPRIMSRV:0,3,0000fe9f-0000-1000-8000-00805f9b34fb,1\r\n";
         m1_parse_spi_at_resp(r, "+BLEGATTCPRIMSRV:", &app);
-        EXPECT(app.u.ble_srv_list.count == 3, "PRIMSRV count=3");
+        EXPECT(app.u.ble_srv_list.count == 3, "PRIMSRV count=3 (unquoted UUIDs)");
         EXPECT(app.u.ble_srv_list.out_list[0].srv_idx == 1
             && strcmp(app.u.ble_srv_list.out_list[0].uuid, "0x1800") == 0,
-            "PRIMSRV[0] = idx 1, 0x1800");
+            "PRIMSRV[0] = idx 1, 0x1800 (no quotes)");
         EXPECT(strcmp(app.u.ble_srv_list.out_list[1].uuid, "0x180A") == 0,
             "PRIMSRV[1] = 0x180A");
         EXPECT(strncmp(app.u.ble_srv_list.out_list[2].uuid, "0000fe9f", 8) == 0,
             "PRIMSRV[2] = canonical 128-bit");
         free(app.u.ble_srv_list.out_list);
     }
+    /* Also accept the old quoted form for back-compat. */
+    {
+        ctrl_cmd_t app = {0};
+        app.msg_id = CTRL_RESP_BLE_GATT_PRIMSRV;
+        char r[] = "+BLEGATTCPRIMSRV:0,1,\"0x1800\",1\r\n";
+        m1_parse_spi_at_resp(r, "+BLEGATTCPRIMSRV:", &app);
+        EXPECT(app.u.ble_srv_list.count == 1
+            && strcmp(app.u.ble_srv_list.out_list[0].uuid, "0x1800") == 0,
+            "PRIMSRV accepts quoted UUID too");
+        free(app.u.ble_srv_list.out_list);
+    }
 
-    /* ---- +BLEGATTCCHAR parsing (mix of char + desc) ---- */
+    /* ---- +BLEGATTCCHAR parsing (unquoted UUIDs, real ESP-AT format) ---- */
     {
         ctrl_cmd_t app = {0};
         app.msg_id = CTRL_RESP_BLE_GATT_CHAR;
         char r[] =
-            "+BLEGATTCCHAR:0,\"char\",2,1,\"0x2A29\",2\r\n"
-            "+BLEGATTCCHAR:0,\"desc\",2,1,1,\"0x2902\"\r\n"
-            "+BLEGATTCCHAR:0,\"char\",2,2,\"0x2A24\",2\r\n"
-            "+BLEGATTCCHAR:0,\"char\",2,3,\"0x2A26\",10\r\n";
+            "+BLEGATTCCHAR:0,\"char\",2,1,0x2A29,2\r\n"
+            "+BLEGATTCCHAR:0,\"desc\",2,1,1,0x2902\r\n"
+            "+BLEGATTCCHAR:0,\"char\",2,2,0x2A24,2\r\n"
+            "+BLEGATTCCHAR:0,\"char\",2,3,0x2A26,10\r\n";
         m1_parse_spi_at_resp(r, "+BLEGATTCCHAR:", &app);
         EXPECT(app.u.ble_char_list.count == 3, "CHAR count=3 (desc skipped)");
         EXPECT(strcmp(app.u.ble_char_list.out_list[0].uuid, "0x2A29") == 0
             && app.u.ble_char_list.out_list[0].props == 2,
-            "CHAR[0] manufacturer, props=2 (Read)");
+            "CHAR[0] manufacturer (0x2A29), props=2 Read");
         EXPECT(app.u.ble_char_list.out_list[2].props == 10,
             "CHAR[2] firmware-rev, props=10 (Read|WriteNR)");
         free(app.u.ble_char_list.out_list);
     }
 
-    /* ---- +BLEGATTCRD parsing ---- */
+    /* ---- +BLEGATTCRD parsing: raw bytes (ESP-AT real format) ---- */
     {
         ctrl_cmd_t app = {0};
         app.msg_id = CTRL_RESP_BLE_GATT_READ;
-        char r[] = "+BLEGATTCRD:0,5,48656c6c6f\r\n"; /* "Hello" */
+        char r[] = "+BLEGATTCRD:0,5,Hello\r\n";
         m1_parse_spi_at_resp(r, "+BLEGATTCRD:", &app);
         EXPECT(app.u.ble_read.value_len == 5
             && strcmp(app.u.ble_read.value_hex, "48656c6c6f") == 0,
-            "BLEGATTCRD len=5, hex=\"Hello\"");
+            "BLEGATTCRD raw='Hello' -> hex 48656c6c6f");
     }
-
-    /* ---- +BLEGATTCRD parsing — empty value ---- */
     {
+        /* Raw value containing binary 0x00 0xFF 0x10. */
+        ctrl_cmd_t app = {0};
+        app.msg_id = CTRL_RESP_BLE_GATT_READ;
+        /* C string literal: 0,3,<NUL>\xff\x10... but NUL would truncate;
+         * test the non-NUL bytes by setting len=3 manually. */
+        char r[] = "+BLEGATTCRD:0,3,\xff\x10\xab\r\n";
+        m1_parse_spi_at_resp(r, "+BLEGATTCRD:", &app);
+        EXPECT(app.u.ble_read.value_len == 3
+            && strcmp(app.u.ble_read.value_hex, "ff10ab") == 0,
+            "BLEGATTCRD raw binary bytes hex-encoded");
+    }
+    {
+        /* Empty value: len=0. */
         ctrl_cmd_t app = {0};
         app.msg_id = CTRL_RESP_BLE_GATT_READ;
         char r[] = "+BLEGATTCRD:0,0,\r\n";
