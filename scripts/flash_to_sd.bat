@@ -237,12 +237,13 @@ if "%SKIP_IRDB%"=="0" (
     REM Also stage per-model files for the Find My Remote discovery flow.
     if exist "%IRDB_SRC%\browse\" (
         if not exist "%DRIVE%\INFRARED\browse\" mkdir "%DRIVE%\INFRARED\browse" 2>nul
-        xcopy /Y /E /I /Q "%IRDB_SRC%\browse" "%DRIVE%\INFRARED\browse" >nul
+        echo   IR browse: copying ~750 small files, may take 30-60s...
+        xcopy /Y /E /I "%IRDB_SRC%\browse" "%DRIVE%\INFRARED\browse" >nul
         if errorlevel 1 (
             echo ERROR: failed to copy IR browse tree to %DRIVE%\INFRARED\browse\.
             exit /b 1
         )
-        echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir + browse\
+        echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir + browse\ done
     ) else (
         echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir
     )
