@@ -59,3 +59,4 @@ build/
 # Generated host-side databases (built by scripts/build_*.py, copied to SD card)
 /oui.bin
 /wifi_wordlist.txt
+/ir_db_out/

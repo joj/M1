@@ -21,6 +21,7 @@
 #include "irmp.h"
 #include "irsnd.h"
 #include "m1_ir_remotes.h"
+#include "m1_ir_export.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -361,6 +362,10 @@ void infrared_learn_new_remote(void)
 
 					memcpy(&irmp_loopback_data, &irmp_data, sizeof(IRMP_DATA));
 					new_remote_learned = 1;
+
+					/* Export the captured signal to SD in Flipper format so
+					 * it can be shared / replayed by other devices. */
+					(void)m1_ir_export_learned(&irmp_data, "Learned");
 
 				} // if (irmp_get_data (&irmp_data))
 			} // if ( q_item.q_evt_type==Q_EVENT_IRRED_RX )

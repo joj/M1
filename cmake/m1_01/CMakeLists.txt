@@ -270,7 +270,9 @@ target_sources(m1_01 INTERFACE
     ../../FatFs/R015/ffsystem_cmsis_os.c
     ../../FatFs/R015/ffunicode.c
     ../../Infrared/m1_ir_remotes.c
-    ../../Infrared/m1_ir_signals.c    
+    ../../Infrared/m1_ir_signals.c
+    ../../Infrared/m1_ir_mass.c
+    ../../Infrared/m1_ir_export.c    
     ../../Infrared/irmp-irsnd/irmp.c
     ../../Infrared/irmp-irsnd/irmpextlog.c
     ../../Infrared/irmp-irsnd/irsnd.c

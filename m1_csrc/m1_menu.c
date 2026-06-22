@@ -20,6 +20,7 @@
 //#include "U8g2lib.h"
 #include "m1_gpio.h"
 #include "m1_infrared.h"
+#include "m1_ir_mass.h"
 #include "m1_nfc.h"
 #include "m1_rfid.h"
 #include "m1_settings.h"
@@ -151,6 +152,34 @@ S_M1_Menu_t menu_Infrared_Universal_Remotes =
 	{&menu_Infrared_Universal_TVs, &menu_Infrared_Universal_Audios, &menu_Infrared_Universal_Projectors, &menu_Infrared_Universal_ACs}
 };
 
+/* --- Mass Off: fire every Power code in the chosen category in sequence. */
+S_M1_Menu_t menu_Infrared_Mass_Off_TV =
+{
+    "TVs (every Power)", infrared_mass_off_tv, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Infrared_Mass_Off_Audio =
+{
+    "Audio (every Power)", infrared_mass_off_audio, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Infrared_Mass_Off_Projector =
+{
+    "Projectors (every Pwr)", infrared_mass_off_projector, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Infrared_Mass_Off_AC =
+{
+    "ACs (every Off)", infrared_mass_off_ac, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
+S_M1_Menu_t menu_Infrared_Mass_Off =
+{
+    "Mass Off", NULL, NULL, NULL, 4, 0, NULL, NULL,
+    {&menu_Infrared_Mass_Off_TV, &menu_Infrared_Mass_Off_Audio,
+     &menu_Infrared_Mass_Off_Projector, &menu_Infrared_Mass_Off_AC}
+};
+
 S_M1_Menu_t menu_Infrared_Learn_New_Remote =
 {
     "Learn", infrared_learn_new_remote, NULL, NULL, 0, 0, NULL, NULL, NULL
@@ -163,8 +192,9 @@ S_M1_Menu_t menu_Infrared_Saved_Remotes =
 
 S_M1_Menu_t menu_Infrared =
 {
-    "Infrared", menu_infrared_init, NULL, NULL, 3, 0, menu_m1_icon_infrared, NULL,
-    {&menu_Infrared_Universal_Remotes, &menu_Infrared_Learn_New_Remote, &menu_Infrared_Saved_Remotes}
+    "Infrared", menu_infrared_init, NULL, NULL, 4, 0, menu_m1_icon_infrared, NULL,
+    {&menu_Infrared_Universal_Remotes, &menu_Infrared_Mass_Off,
+     &menu_Infrared_Learn_New_Remote, &menu_Infrared_Saved_Remotes}
 };
 
 /*------------------------------- > GPIO -------------------------------------*/

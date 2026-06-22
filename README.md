@@ -34,6 +34,7 @@ See [HARDWARE.md](HARDWARE.md) for more details.
 - [BLE GATT Deep-Probe](documentation/ble_gatt_probe.md) – Long-press OK on a scanned BLE device to read its DIS and walk its services
 - [WiFi WPA-PSK Dictionary Attack](documentation/wifi_dict_attack.md) – Long-press OK on a scanned wifi AP to run an online dictionary attack
 - [WiFi Handshake / PMKID Capture](documentation/wifi_handshake_capture.md) – Long-press OK → "Capture hand" → hashcat .22000 files on SD
+- [Flipper IR compat + Mass Off](documentation/ir_flipper_compat.md) – Use the Flipper-IRDB, "TV-Be-Gone"-style Mass Off, export learned signals back to Flipper
 
 ## Building
 

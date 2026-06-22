@@ -10,6 +10,7 @@ REM     scripts\flash_to_sd.bat E:                  rem stage everything
 REM     scripts\flash_to_sd.bat E: --no-build       rem skip the auto-`make` step
 REM     scripts\flash_to_sd.bat E: --no-oui         rem skip OUI DB
 REM     scripts\flash_to_sd.bat E: --no-wordlist    rem skip wifi wordlist
+REM     scripts\flash_to_sd.bat E: --no-irdb        rem skip Flipper IR database
 REM     scripts\flash_to_sd.bat                     rem prompts for drive letter
 REM
 REM Multiple flags may be combined in any order.
@@ -20,9 +21,10 @@ REM      source file under m1_csrc/ / Esp_spi_at/ / Core/ / cmake/, runs
 REM      `make` inside WSL to rebuild. Pass --no-build to skip this check.
 REM   2. (Optional) Builds oui.bin in the repo root if missing.
 REM   3. (Optional) Builds wifi_wordlist.txt in the repo root if missing.
-REM   4. Copies the firmware to <DRIVE>\, oui.bin to <DRIVE>\databases\,
-REM      and wifi_wordlist.txt to <DRIVE>\databases\.
-REM   5. Lists what's now on the card.
+REM   4. (Optional) Builds the Flipper IR database under ir_db_out/ if missing.
+REM   5. Copies the firmware to <DRIVE>\, oui.bin and wifi_wordlist.txt to
+REM      <DRIVE>\databases\, and the IR db to <DRIVE>\INFRARED\.
+REM   6. Lists what's now on the card.
 REM
 REM On the M1:  Menu -> Firmware Update -> select MonstaTek_M1_v0800_wCRC.bin
 
@@ -33,8 +35,10 @@ set "REPO_ROOT=%SCRIPT_DIR%.."
 set "FW_SRC=%REPO_ROOT%\artifacts\MonstaTek_M1_v0800_wCRC.bin"
 set "OUI_SRC=%REPO_ROOT%\oui.bin"
 set "WORDLIST_SRC=%REPO_ROOT%\wifi_wordlist.txt"
+set "IRDB_SRC=%REPO_ROOT%\ir_db_out\INFRARED"
 set "SKIP_OUI=0"
 set "SKIP_WORDLIST=0"
+set "SKIP_IRDB=0"
 set "SKIP_BUILD=0"
 set "DRIVE="
 
@@ -43,6 +47,7 @@ REM --- Parse arguments in any order ---
 if "%~1"=="" goto args_done
 if /I "%~1"=="--no-oui"      ( set "SKIP_OUI=1"      & shift & goto argloop )
 if /I "%~1"=="--no-wordlist" ( set "SKIP_WORDLIST=1" & shift & goto argloop )
+if /I "%~1"=="--no-irdb"     ( set "SKIP_IRDB=1"     & shift & goto argloop )
 if /I "%~1"=="--no-build"    ( set "SKIP_BUILD=1"    & shift & goto argloop )
 if "%DRIVE%"=="" ( set "DRIVE=%~1" & shift & goto argloop )
 echo WARN: unrecognised argument "%~1"
@@ -161,6 +166,25 @@ if "%SKIP_WORDLIST%"=="0" (
     )
 )
 
+REM --- Optionally build the Flipper IR DB if missing ---
+if "%SKIP_IRDB%"=="0" (
+    if not exist "%IRDB_SRC%\db\tv.ir" (
+        echo IR database not found; building via scripts\fetch_flipper_irdb.py ...
+        if "!PYTHON_AVAILABLE!"=="0" (
+            echo ERROR: python is not on PATH. Install Python 3 or pass --no-irdb.
+            exit /b 1
+        )
+        pushd "%REPO_ROOT%" >nul
+        python "%SCRIPT_DIR%fetch_flipper_irdb.py" --out ir_db_out
+        set "PY_RC=!errorlevel!"
+        popd >nul
+        if not "!PY_RC!"=="0" (
+            echo ERROR: fetch_flipper_irdb.py failed ^(rc=!PY_RC!^).
+            exit /b 1
+        )
+    )
+)
+
 REM --- Stage the firmware ---
 echo.
 echo === Staging firmware to %DRIVE%\ ===
@@ -199,12 +223,29 @@ if "%SKIP_WORDLIST%"=="0" (
     echo   wordlist:  skipped ^(--no-wordlist^)
 )
 
+REM --- Stage the Flipper IR DB ---
+if "%SKIP_IRDB%"=="0" (
+    if not exist "%DRIVE%\INFRARED\db\" mkdir "%DRIVE%\INFRARED\db" 2>nul
+    copy /Y "%IRDB_SRC%\db\tv.ir"        "%DRIVE%\INFRARED\db\" >nul
+    copy /Y "%IRDB_SRC%\db\audio.ir"     "%DRIVE%\INFRARED\db\" >nul
+    copy /Y "%IRDB_SRC%\db\projector.ir" "%DRIVE%\INFRARED\db\" >nul
+    copy /Y "%IRDB_SRC%\db\ac.ir"        "%DRIVE%\INFRARED\db\" >nul
+    if errorlevel 1 (
+        echo ERROR: failed to copy IR database to %DRIVE%\INFRARED\db\.
+        exit /b 1
+    )
+    echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir
+) else (
+    echo   IR db:     skipped ^(--no-irdb^)
+)
+
 REM --- Show what we wrote ---
 echo.
 echo === Contents on %DRIVE% ===
 dir /B "%DRIVE%\MonstaTek_M1_v0800_wCRC.bin" 2>nul
 if "%SKIP_OUI%"=="0"      dir /B "%DRIVE%\databases\oui.bin" 2>nul
 if "%SKIP_WORDLIST%"=="0" dir /B "%DRIVE%\databases\wifi_wordlist.txt" 2>nul
+if "%SKIP_IRDB%"=="0"     dir /B "%DRIVE%\INFRARED\db\*.ir" 2>nul
 
 echo.
 echo Done. Eject the SD card and pop it into the M1.
