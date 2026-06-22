@@ -55,3 +55,7 @@ compile_commands.json
 build/
 /.cache
 /artifacts
+
+# Generated host-side databases (built by scripts/build_*.py, copied to SD card)
+/oui.bin
+/wifi_wordlist.txt
