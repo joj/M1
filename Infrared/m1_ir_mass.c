@@ -162,10 +162,16 @@ static void mass_off_run(uint8_t remote_type)
     m1_u8g2_nextpage();
 
     /* Load + validate the file. */
-    if (ir_remote_file_header_check(db_file_for(remote_type), remote_type)
-        || ir_remote_file_data_check(remote_type))
+    uint8_t hdr_err = ir_remote_file_header_check(db_file_for(remote_type), remote_type);
+    uint8_t data_err = hdr_err ? 0xFF : ir_remote_file_data_check(remote_type);
+    if (hdr_err || data_err)
     {
-        draw_screen(header, 0, 0, "DB error");
+        char line[40];
+        if (hdr_err)
+            snprintf(line, sizeof(line), "No DB at %s", db_file_for(remote_type));
+        else
+            snprintf(line, sizeof(line), "Bad DB content");
+        draw_screen(header, 0, 0, line);
         S_M1_Main_Q_t q;
         S_M1_Buttons_Status b;
         while (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) == pdTRUE)

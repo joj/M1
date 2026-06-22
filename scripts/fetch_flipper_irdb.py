@@ -208,7 +208,11 @@ def process_category(irdb_root: Path, sub: str, name_map: dict, cap: int):
 def write_category(out_dir: Path, fname: str, kept: list):
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / fname
-    with out_path.open("w", encoding="utf-8") as f:
+    # The M1 firmware's IR parser expects LF-only line endings
+    # (#define IR_SIGNALS_KEYWORD_CRLF "\n"). Python's text-mode open()
+    # on Windows translates LF->CRLF, which corrupts every entry name's
+    # match. Force LF explicitly by passing newline="".
+    with out_path.open("w", encoding="utf-8", newline="") as f:
         f.write("Filetype: IR signals file\nVersion: 1\n#\n")
         # M1 reads function-grouped: every Power first, then every Mute, etc.
         kept.sort(key=lambda x: x[0])
