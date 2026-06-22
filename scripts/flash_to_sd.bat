@@ -4,17 +4,20 @@ REM
 REM flash_to_sd.bat — Stage a new firmware build, the OUI database, and the
 REM WiFi WPA dictionary wordlist onto the M1 SD card.
 REM
-REM Usage (run from the repo root, after `make` has produced artifacts/):
+REM Usage (run from the repo root):
 REM
 REM     scripts\flash_to_sd.bat E:                  rem stage everything
+REM     scripts\flash_to_sd.bat E: --no-build       rem skip the auto-`make` step
 REM     scripts\flash_to_sd.bat E: --no-oui         rem skip OUI DB
 REM     scripts\flash_to_sd.bat E: --no-wordlist    rem skip wifi wordlist
 REM     scripts\flash_to_sd.bat                     rem prompts for drive letter
 REM
-REM Multiple --no-* flags may be combined in any order.
+REM Multiple flags may be combined in any order.
 REM
 REM What it does:
-REM   1. Verifies artifacts\MonstaTek_M1_v0800_wCRC.bin exists.
+REM   1. If artifacts\MonstaTek_M1_v0800_wCRC.bin is missing or older than any
+REM      source file under m1_csrc/ / Esp_spi_at/ / Core/ / cmake/, runs
+REM      `make` inside WSL to rebuild. Pass --no-build to skip this check.
 REM   2. (Optional) Builds oui.bin in the repo root if missing.
 REM   3. (Optional) Builds wifi_wordlist.txt in the repo root if missing.
 REM   4. Copies the firmware to <DRIVE>\, oui.bin to <DRIVE>\databases\,
@@ -32,6 +35,7 @@ set "OUI_SRC=%REPO_ROOT%\oui.bin"
 set "WORDLIST_SRC=%REPO_ROOT%\wifi_wordlist.txt"
 set "SKIP_OUI=0"
 set "SKIP_WORDLIST=0"
+set "SKIP_BUILD=0"
 set "DRIVE="
 
 REM --- Parse arguments in any order ---
@@ -39,6 +43,7 @@ REM --- Parse arguments in any order ---
 if "%~1"=="" goto args_done
 if /I "%~1"=="--no-oui"      ( set "SKIP_OUI=1"      & shift & goto argloop )
 if /I "%~1"=="--no-wordlist" ( set "SKIP_WORDLIST=1" & shift & goto argloop )
+if /I "%~1"=="--no-build"    ( set "SKIP_BUILD=1"    & shift & goto argloop )
 if "%DRIVE%"=="" ( set "DRIVE=%~1" & shift & goto argloop )
 echo WARN: unrecognised argument "%~1"
 shift
@@ -62,10 +67,54 @@ if not exist "%DRIVE%\" (
     exit /b 1
 )
 
-REM --- Sanity-check the firmware artifact ---
+REM --- Sanity-check the firmware artifact; rebuild via WSL `make` if needed.
+REM   "Needed" = artifact missing, or any source file under m1_csrc/ /
+REM   Esp_spi_at/ / cmake/ / Core/ is newer than the artifact. Skipped if
+REM   --no-build was passed.
+
+set "REBUILD=0"
+if not exist "%FW_SRC%" set "REBUILD=1"
+if "%SKIP_BUILD%"=="1" set "REBUILD=0"
+
+if "%REBUILD%"=="0" if "%SKIP_BUILD%"=="0" if exist "%FW_SRC%" (
+    REM PowerShell: any source file newer than the artifact?
+    for /f "delims=" %%i in ('powershell -NoProfile -Command ^
+        "$art = Get-Item -LiteralPath '%FW_SRC%' -ErrorAction SilentlyContinue;" ^
+        "if (-not $art) { 'rebuild'; exit }" ^
+        "$dirs = 'm1_csrc','Esp_spi_at\examples\at_spi_master\spi\stm32\main','Core\Src','Core\Inc','cmake\m1_01';" ^
+        "$newer = $false;" ^
+        "foreach ($d in $dirs) {" ^
+        "  $p = Join-Path '%REPO_ROOT%' $d;" ^
+        "  if (Test-Path $p) {" ^
+        "    Get-ChildItem -LiteralPath $p -Recurse -File -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $art.LastWriteTime } | ForEach-Object { $newer = $true } }" ^
+        "}" ^
+        "if ($newer) { 'rebuild' } else { 'ok' }"') do (
+        if "%%i"=="rebuild" set "REBUILD=1"
+    )
+)
+
+if "%REBUILD%"=="1" (
+    echo === artifact missing or stale; running `make` via WSL ===
+    where wsl >nul 2>&1
+    if errorlevel 1 (
+        echo ERROR: WSL is not on PATH. Build manually in your build env:
+        echo         make
+        echo or re-run with --no-build to flash an existing artifact.
+        exit /b 1
+    )
+    pushd "%REPO_ROOT%" >nul
+    wsl make
+    set "MAKE_RC=!errorlevel!"
+    popd >nul
+    if not "!MAKE_RC!"=="0" (
+        echo ERROR: `make` failed ^(rc=!MAKE_RC!^). Run it manually to see the build output.
+        exit /b 1
+    )
+)
+
 if not exist "%FW_SRC%" (
-    echo ERROR: %FW_SRC% not found.
-    echo Build the firmware first: open a WSL shell in the repo root and run `make`.
+    echo ERROR: %FW_SRC% still not present.
+    echo Build the firmware first: open a WSL shell and run `make`, then re-run.
     exit /b 1
 )
 
