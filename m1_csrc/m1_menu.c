@@ -21,6 +21,7 @@
 #include "m1_gpio.h"
 #include "m1_infrared.h"
 #include "m1_ir_mass.h"
+#include "m1_ir_discover.h"
 #include "m1_nfc.h"
 #include "m1_rfid.h"
 #include "m1_settings.h"
@@ -158,6 +159,54 @@ S_M1_Menu_t menu_Infrared_Universal_Remotes =
 	{&menu_Infrared_Universal_TVs, &menu_Infrared_Universal_Audios, &menu_Infrared_Universal_Projectors, &menu_Infrared_Universal_ACs}
 };
 
+/* --- Find My Remote: cycle Power codes, OK locks current model. --- */
+S_M1_Menu_t menu_Infrared_Discover_TV =
+{
+    "Find My TV", infrared_discover_tv, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Discover_Audio =
+{
+    "Find My Audio", infrared_discover_audio, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Discover_Projector =
+{
+    "Find My Projector", infrared_discover_projector, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Discover_AC =
+{
+    "Find My AC", infrared_discover_ac, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Discover =
+{
+    "Find My Remote", NULL, NULL, NULL, 4, 0, NULL, NULL,
+    {&menu_Infrared_Discover_TV, &menu_Infrared_Discover_Audio,
+     &menu_Infrared_Discover_Projector, &menu_Infrared_Discover_AC}
+};
+
+/* --- Last: skip discovery, load the previously locked model. --- */
+S_M1_Menu_t menu_Infrared_Last_TV =
+{
+    "Last TV", infrared_last_tv, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Last_Audio =
+{
+    "Last Audio", infrared_last_audio, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Last_Projector =
+{
+    "Last Projector", infrared_last_projector, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Last_AC =
+{
+    "Last AC", infrared_last_ac, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+S_M1_Menu_t menu_Infrared_Last =
+{
+    "Last", NULL, NULL, NULL, 4, 0, NULL, NULL,
+    {&menu_Infrared_Last_TV, &menu_Infrared_Last_Audio,
+     &menu_Infrared_Last_Projector, &menu_Infrared_Last_AC}
+};
+
 /* --- Mass Off: fire every Power code in the chosen category in sequence. */
 S_M1_Menu_t menu_Infrared_Mass_Off_TV =
 {
@@ -198,8 +247,9 @@ S_M1_Menu_t menu_Infrared_Saved_Remotes =
 
 S_M1_Menu_t menu_Infrared =
 {
-    "Infrared", menu_infrared_init, NULL, NULL, 4, 0, menu_m1_icon_infrared, NULL,
-    {&menu_Infrared_Universal_Remotes, &menu_Infrared_Mass_Off,
+    "Infrared", menu_infrared_init, NULL, NULL, 6, 0, menu_m1_icon_infrared, NULL,
+    {&menu_Infrared_Discover, &menu_Infrared_Last,
+     &menu_Infrared_Universal_Remotes, &menu_Infrared_Mass_Off,
      &menu_Infrared_Learn_New_Remote, &menu_Infrared_Saved_Remotes}
 };
 

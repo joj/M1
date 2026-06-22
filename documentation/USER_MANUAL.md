@@ -202,21 +202,51 @@ empty), `v:(not readable)`.
 
 ```
 Infrared
- ├── Universal Remotes
+ ├── Find My Remote      ← new (discover + lock + grid)
+ │    ├── Find My TV
+ │    ├── Find My Audio
+ │    ├── Find My Projector
+ │    └── Find My AC
+ ├── Last                ← new (skip discover, go straight to grid)
+ │    ├── Last TV
+ │    ├── Last Audio
+ │    ├── Last Projector
+ │    └── Last AC
+ ├── Universal Remotes   (legacy — press OK to advance through codes)
  │    ├── TV remotes
  │    ├── Audio player remotes
  │    ├── Projector remotes
  │    └── AC remotes
- ├── Mass Off                ← new
+ ├── Mass Off            (TV-Be-Gone: fire every Power code without locking)
  │    ├── TVs (every Power)
  │    ├── Audio (every Power)
  │    ├── Projectors (every Pwr)
  │    └── ACs (every Off)
- ├── Learn                   ← now auto-exports
+ ├── Learn               (also auto-exports captured signal)
  └── Replay
 ```
 
-### Universal Remotes
+### Find My Remote (recommended)
+
+The fastest way to drive your TV/AV/projector/AC:
+
+1. Point the M1 at the target.
+2. *Menu → Infrared → Find My Remote → Find My TV*.
+3. The M1 cycles through every per-model `.ir` file in
+   `/INFRARED/browse/TVs/` (typically ~400), firing one Power code
+   from each every ~250 ms. The screen ticks `<n>: <model>` as it
+   goes.
+4. The moment your TV reacts — **press OK**.
+5. The M1 locks that model, saves it as `Last TV`, and brings up
+   the full button grid (Power / Mute / Vol± / Ch±) for that
+   specific remote model. From there it's a regular remote.
+
+Next time: *Menu → Infrared → Last → Last TV* skips discovery and
+loads the grid directly.
+
+BACK at any point aborts.
+
+### Universal Remotes (legacy)
 
 Unchanged behaviour. Press a button (Power / Vol / Mute / etc.) and
 the M1 walks through every code in the database matching that

@@ -475,6 +475,27 @@ static void ir_button_icon_redraw(S_M1_IR_Remote_Buttons_t *pbutton, uint8_t inv
 static uint8_t ir_remote_function_play(uint8_t ir_remote_type, uint8_t function_type);
 static void ir_play_status_update(uint8_t init, uint16_t round_n, uint8_t refresh);
 
+/* Optional runtime override for the .ir file path used by the universal
+ * remote grid. NULL => use the hardcoded db_filename. The Discover flow
+ * (Infrared/m1_ir_discover.c) sets this to a per-model file under
+ * /INFRARED/browse/<cat>/ or /INFRARED/saved/last_<cat>.ir before
+ * invoking the grid. */
+static const char *ir_db_path_override = NULL;
+void ir_set_db_path_override(const char *path) { ir_db_path_override = path; }
+
+static inline const char *ir_db_path_for(uint8_t remote_type)
+{
+	return ir_db_path_override ? ir_db_path_override : ir_buttons_info[remote_type].db_filename;
+}
+
+/* Exposed for Discover: run the existing universal-remote button grid
+ * against the override path that the caller has set via
+ * ir_set_db_path_override(). */
+void infrared_universal_for_override(uint8_t remote_type)
+{
+	infrared_universal_all_remotes(remote_type);
+}
+
 /*************** F U N C T I O N   I M P L E M E N T A T I O N ****************/
 
 /*============================================================================*/
@@ -544,7 +565,7 @@ static void infrared_universal_all_remotes(uint8_t remote_type)
 
 	do
 	{
-		sys_error = ir_remote_file_header_check(ir_buttons_info[remote_type].db_filename, remote_type);
+		sys_error = ir_remote_file_header_check(ir_db_path_for(remote_type), remote_type);
 		if ( sys_error )
 			break;
 		sys_error = ir_remote_file_data_check(remote_type);
@@ -675,7 +696,7 @@ static void infrared_universal_all_remotes(uint8_t remote_type)
 					{
 						if ( !header_checked )
 						{
-							sys_error = ir_remote_file_header_check(ir_buttons_info[remote_type].db_filename, remote_type); // Validate again before playing
+							sys_error = ir_remote_file_header_check(ir_db_path_for(remote_type), remote_type); // Validate again before playing
 							if ( sys_error )
 							{
 								ir_play_status_update(0xFF, 0, 0);

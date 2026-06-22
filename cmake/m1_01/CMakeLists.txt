@@ -272,6 +272,7 @@ target_sources(m1_01 INTERFACE
     ../../Infrared/m1_ir_remotes.c
     ../../Infrared/m1_ir_signals.c
     ../../Infrared/m1_ir_mass.c
+    ../../Infrared/m1_ir_discover.c
     ../../Infrared/m1_ir_export.c    
     ../../Infrared/irmp-irsnd/irmp.c
     ../../Infrared/irmp-irsnd/irmpextlog.c

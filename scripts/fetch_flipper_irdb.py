@@ -93,11 +93,12 @@ AC_NAMES = {
 }
 
 CATEGORIES = [
-    # (Flipper top-level dir, output filename, name map, max entries kept)
-    ("TVs",                       "tv.ir",        TV_NAMES,        2000),
-    ("Audio_and_Video_Receivers", "audio.ir",     AUDIO_NAMES,     1500),
-    ("Projectors",                "projector.ir", PROJECTOR_NAMES, 1000),
-    ("ACs",                       "ac.ir",        AC_NAMES,        1500),
+    # (Flipper top-level dir, output filename, name map, max entries kept,
+    #  per-model browse subdir)
+    ("TVs",                       "tv.ir",        TV_NAMES,        2000, "TVs"),
+    ("Audio_and_Video_Receivers", "audio.ir",     AUDIO_NAMES,     1500, "Audio"),
+    ("Projectors",                "projector.ir", PROJECTOR_NAMES, 1000, "Projectors"),
+    ("ACs",                       "ac.ir",        AC_NAMES,        1500, "ACs"),
 ]
 
 
@@ -177,7 +178,8 @@ def fetch_irdb(target: Path) -> Path:
     return target
 
 
-def process_category(irdb_root: Path, sub: str, name_map: dict, cap: int):
+def process_category(irdb_root: Path, sub: str, name_map: dict, cap: int,
+                     per_model_out: Path | None = None):
     cat_dir = irdb_root / sub
     if not cat_dir.is_dir():
         sys.stderr.write(f"WARN: {cat_dir} not found in clone; skipping\n")
@@ -185,13 +187,47 @@ def process_category(irdb_root: Path, sub: str, name_map: dict, cap: int):
     kept = []
     seen = set()
     per_name = defaultdict(int)
+    models_written = 0
     for path in sorted(cat_dir.rglob("*.ir")):
+        # Per-model output for the firmware's "Discover" / "Find My Remote"
+        # flow. Each remote model becomes one file under per_model_out,
+        # named "<Brand>_<Model>.ir" so all files sit flat in a single
+        # directory the firmware can f_readdir cheaply.
+        model_entries = []
+        model_seen = set()
         for entry in parse_ir_file(path):
             if not is_supported(entry):
                 continue
             cname = canonical_name(name_map, entry.get("name", ""))
             if not cname:
                 continue
+            k = entry_key(entry)
+            if k in model_seen:
+                continue
+            model_seen.add(k)
+            model_entries.append((cname, entry))
+
+        if per_model_out and model_entries:
+            # Use the relative path from category dir for a flat unique
+            # filename: TVs/Samsung/Samsung_AA59-00714A.ir -> Samsung_Samsung_AA59-00714A.ir
+            rel = path.relative_to(cat_dir)
+            flat_name = "_".join(rel.parts)
+            if not flat_name.lower().endswith(".ir"):
+                flat_name += ".ir"
+            # Sanitise: replace whitespace with _.
+            flat_name = re.sub(r"\s+", "_", flat_name)
+            out_path = per_model_out / flat_name
+            with out_path.open("w", encoding="utf-8", newline="") as f:
+                f.write("Filetype: IR signals file\nVersion: 1\n#\n")
+                # Sort by function for the on-device grid consumer.
+                model_entries.sort(key=lambda x: x[0])
+                for cname, entry in model_entries:
+                    f.write(format_entry(entry, cname))
+            models_written += 1
+
+        # Now also merge into the flat consolidated file (existing
+        # Universal Remotes + Mass Off consumers).
+        for cname, entry in model_entries:
             k = entry_key(entry)
             if k in seen:
                 continue
@@ -202,6 +238,8 @@ def process_category(irdb_root: Path, sub: str, name_map: dict, cap: int):
                 break
         if len(kept) >= cap:
             break
+    if per_model_out:
+        sys.stderr.write(f"  ({models_written} per-model files written to {per_model_out})\n")
     return kept, per_name
 
 
@@ -247,10 +285,14 @@ def main() -> int:
     out_root = Path(args.out)
     db_dir = out_root / "INFRARED" / "db"
     db_dir.mkdir(parents=True, exist_ok=True)
+    browse_root = out_root / "INFRARED" / "browse"
+    browse_root.mkdir(parents=True, exist_ok=True)
 
     grand_total = 0
-    for sub, fname, name_map, cap in CATEGORIES:
-        kept, per_name = process_category(irdb_root, sub, name_map, cap)
+    for sub, fname, name_map, cap, browse_subdir in CATEGORIES:
+        browse_dir = browse_root / browse_subdir
+        browse_dir.mkdir(parents=True, exist_ok=True)
+        kept, per_name = process_category(irdb_root, sub, name_map, cap, browse_dir)
         out_path = write_category(db_dir, fname, kept)
         size = out_path.stat().st_size
         breakdown = ", ".join(f"{k}={v}" for k, v in sorted(per_name.items()))

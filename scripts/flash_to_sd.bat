@@ -234,7 +234,18 @@ if "%SKIP_IRDB%"=="0" (
         echo ERROR: failed to copy IR database to %DRIVE%\INFRARED\db\.
         exit /b 1
     )
-    echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir
+    REM Also stage per-model files for the Find My Remote discovery flow.
+    if exist "%IRDB_SRC%\browse\" (
+        if not exist "%DRIVE%\INFRARED\browse\" mkdir "%DRIVE%\INFRARED\browse" 2>nul
+        xcopy /Y /E /I /Q "%IRDB_SRC%\browse" "%DRIVE%\INFRARED\browse" >nul
+        if errorlevel 1 (
+            echo ERROR: failed to copy IR browse tree to %DRIVE%\INFRARED\browse\.
+            exit /b 1
+        )
+        echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir + browse\
+    ) else (
+        echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir
+    )
 ) else (
     echo   IR db:     skipped ^(--no-irdb^)
 )
