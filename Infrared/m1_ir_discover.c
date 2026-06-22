@@ -2,25 +2,40 @@
 /*
  * m1_ir_discover.c — "Find My Remote" discovery + Last entry points.
  *
+ * Reads a single `.pack` bundle per category from
+ *   /INFRARED/browse/{tv,audio,projector,ac}.pack
+ *
+ * Pack format (LF-only throughout):
+ *   "M1IR1\n"
+ *   "<count>\n"
+ *   <for each model:>
+ *       "<model_name>\n"        (<= ~75 chars)
+ *       "<length>\n"            (ASCII decimal payload size)
+ *       <length bytes of standard .ir content>
+ *
  * Discover flow:
- *   1. Build a sorted listing of all per-model .ir files under
- *      /INFRARED/browse/<category>/. Each entry is one specific
- *      remote model (e.g. Samsung_AA59-00714A.ir).
- *   2. Cycle through the list. For each file, transmit just its
- *      Power code (Off for AC). Brief pause + redraw.
- *   3. Watch the keypad concurrently:
- *      - OK: lock the currently-firing model. Copy that file to
- *        /INFRARED/saved/last_<cat>.ir, then hand control off to the
- *        existing button-grid UI in m1_ir_remotes.c (via
- *        ir_set_db_path_override + infrared_universal_for_override).
- *      - BACK: abort, return to menu.
- *   4. When the listing is exhausted, show "End of list" and wait
- *      for BACK.
+ *   1. Open the .pack, validate magic, read model count.
+ *   2. Pass 1 — walk every entry, collect unique brand prefixes
+ *      (filename portion before the first '_'). Skip payloads.
+ *   3. Show brand picker; user picks "<All brands>" or a specific
+ *      brand. Sorted alphabetically.
+ *   4. Pass 2 — re-walk. For each model whose brand matches:
+ *        - stream payload into /INFRARED/.cycle.tmp.ir
+ *        - transmit just its Power code (Off for AC)
+ *        - poll keypad for 250 ms
+ *           - OK: rename .cycle.tmp.ir -> /INFRARED/saved/last_<cat>.ir,
+ *             hand off to the existing button-grid UI in m1_ir_remotes.c
+ *             (via ir_set_db_path_override + infrared_universal_for_override).
+ *           - BACK: abort.
+ *   5. End-of-pack with no lock => "End of list", wait BACK.
  *
  * Last flow:
- *   - Just point the override at /INFRARED/saved/last_<cat>.ir and
- *     call infrared_universal_for_override(). Errors if no Last has
- *     been saved.
+ *   Point the override at /INFRARED/saved/last_<cat>.ir if it exists
+ *   and call infrared_universal_for_override(). Error if not present.
+ *
+ * Switching from per-model files to a single .pack collapses 749
+ * tiny SD writes (on initial flashing) and 393 metadata reads
+ * (on each discovery pass) into 4 fast sequential reads.
  *
  * M1 Project
  */
@@ -48,128 +63,24 @@
 
 #define M1_LOGDB_TAG          "IR_DISC"
 
-#define DISCOVER_PAUSE_MS     250    /* between successive model attempts */
+#define DISCOVER_PAUSE_MS     250
 #define ROW_H                 (M1_GUI_FONT_HEIGHT)
+#define FN_POWER              0
 
-#define FN_POWER              0       /* Power index in TV/Audio/Projector,
-                                         Off index in AC — both 0 in
-                                         ir_remote_*_functions[]. */
+#define PACK_MAGIC            "M1IR1"
+#define PACK_TMP              "0:/INFRARED/.cycle.tmp.ir"
 
-/* Persistent path buffers used as the override target. Held static so
- * the pointer passed to ir_set_db_path_override() remains valid for
- * the lifetime of the button-grid call. */
+/* Buffers held static so handoff override pointer remains valid. */
 static char s_locked_path[80];
 
-/* Brand picker state. Brand = filename prefix before the first '_'
- * (e.g. "Samsung" in "Samsung_AA59-00714A.ir"). */
+/* Brand picker state. */
 #define MAX_BRANDS 128
 #define BRAND_LEN  20
 #define PICK_ROWS  5
 static char s_brands[MAX_BRANDS][BRAND_LEN];
 static int  s_brand_count;
 
-static void brand_of(const char *fname, char *out, size_t outsz)
-{
-	size_t i = 0;
-	while (fname[i] && fname[i] != '_' && i + 1 < outsz)
-	{
-		out[i] = fname[i];
-		i++;
-	}
-	out[i] = 0;
-}
-
-static int brand_cmp(const void *a, const void *b)
-{
-	return strcasecmp((const char *)a, (const char *)b);
-}
-
-/* Scan directory, collect unique brand prefixes, sort. */
-static bool collect_brands(const char *dir)
-{
-	s_brand_count = 0;
-	DIR d;
-	if (f_opendir(&d, dir) != FR_OK) return false;
-	FILINFO fi;
-	while (f_readdir(&d, &fi) == FR_OK && fi.fname[0])
-	{
-		if (fi.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
-		size_t n = strlen(fi.fname);
-		if (n < 4 || strcasecmp(&fi.fname[n - 3], ".ir") != 0) continue;
-		char brand[BRAND_LEN];
-		brand_of(fi.fname, brand, sizeof(brand));
-		if (!brand[0]) continue;
-		bool dup = false;
-		for (int i = 0; i < s_brand_count; i++)
-			if (!strcasecmp(s_brands[i], brand)) { dup = true; break; }
-		if (dup) continue;
-		if (s_brand_count >= MAX_BRANDS) break;
-		snprintf(s_brands[s_brand_count++], BRAND_LEN, "%s", brand);
-	}
-	f_closedir(&d);
-	qsort(s_brands, s_brand_count, BRAND_LEN, brand_cmp);
-	return s_brand_count > 0;
-}
-
-static void draw_picker(const char *header, int cursor, int top)
-{
-	int total = s_brand_count + 1;  /* +1 for "<All brands>" */
-	m1_u8g2_firstpage();
-	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
-	u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
-	u8g2_DrawStr(&m1_u8g2, 2, ROW_H, header);
-	for (int r = 0; r < PICK_ROWS; r++)
-	{
-		int idx = top + r;
-		if (idx >= total) break;
-		const char *label = (idx == 0) ? "<All brands>" : s_brands[idx - 1];
-		int y = 14 + ROW_H + r * ROW_H;
-		if (idx == cursor)
-			u8g2_DrawStr(&m1_u8g2, 2, y, ">");
-		u8g2_DrawStr(&m1_u8g2, 10, y, label);
-	}
-	m1_u8g2_nextpage();
-}
-
-/* Returns 0 = aborted, 1 = chosen. Writes brand into out_brand
- * (empty string = All brands). */
-static int pick_brand(const char *header, char *out_brand, size_t outsz)
-{
-	int cursor = 0, top = 0;
-	int total  = s_brand_count + 1;
-	draw_picker(header, cursor, top);
-
-	for (;;)
-	{
-		S_M1_Main_Q_t q;
-		if (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) != pdTRUE) continue;
-		if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
-		S_M1_Buttons_Status b;
-		if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
-		if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) return 0;
-		if (b.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK)
-		{
-			if (cursor == 0) out_brand[0] = 0;
-			else snprintf(out_brand, outsz, "%s", s_brands[cursor - 1]);
-			return 1;
-		}
-		bool moved = false;
-		if (b.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK)
-		{
-			if (cursor > 0) { cursor--; moved = true; }
-			if (cursor < top) top = cursor;
-		}
-		if (b.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK)
-		{
-			if (cursor + 1 < total) { cursor++; moved = true; }
-			if (cursor >= top + PICK_ROWS) top = cursor - PICK_ROWS + 1;
-		}
-		if (moved) draw_picker(header, cursor, top);
-	}
-}
-
-/* From m1_ir_remotes.c — extern declarations to access the shared
- * payload + protocol mapping and trigger transmission. */
+/* From m1_ir_remotes.c. */
 extern uint8_t ir_remote_function_data_read(uint8_t remote_type, uint8_t function_type);
 extern uint8_t ir_payload_info_get(S_M1_IR_Payload_t *payload);
 extern void    ir_remote_file_deinit(void);
@@ -183,13 +94,15 @@ extern const struct S_M1_IR_Protocol_Mapping {
 
 #define IR_PROTOCOLS_MAPPING_MAX  15
 
-static const char *browse_dir_for(uint8_t rt)
+/* ---------------- path helpers ---------------- */
+
+static const char *pack_path_for(uint8_t rt)
 {
 	switch (rt) {
-		case IR_REMOTETYPE_TV:        return "0:/INFRARED/browse/TVs";
-		case IR_REMOTETYPE_AUDIO:     return "0:/INFRARED/browse/Audio";
-		case IR_REMOTETYPE_PROJECTOR: return "0:/INFRARED/browse/Projectors";
-		case IR_REMOTETYPE_AC:        return "0:/INFRARED/browse/ACs";
+		case IR_REMOTETYPE_TV:        return "0:/INFRARED/browse/tv.pack";
+		case IR_REMOTETYPE_AUDIO:     return "0:/INFRARED/browse/audio.pack";
+		case IR_REMOTETYPE_PROJECTOR: return "0:/INFRARED/browse/projector.pack";
+		case IR_REMOTETYPE_AC:        return "0:/INFRARED/browse/ac.pack";
 		default:                      return NULL;
 	}
 }
@@ -216,6 +129,8 @@ static const char *header_for(uint8_t rt)
 	}
 }
 
+/* ---------------- UI helpers ---------------- */
+
 static void draw_screen(const char *header, const char *line1,
                         const char *line2, const char *bottom)
 {
@@ -230,8 +145,193 @@ static void draw_screen(const char *header, const char *line1,
 	m1_u8g2_nextpage();
 }
 
-/* Transmit the first Power/Off entry from a specific .ir file path.
- * Returns true on success. */
+static void brand_of(const char *fname, char *out, size_t outsz)
+{
+	size_t i = 0;
+	while (fname[i] && fname[i] != '_' && i + 1 < outsz)
+	{
+		out[i] = fname[i];
+		i++;
+	}
+	out[i] = 0;
+}
+
+static int brand_cmp(const void *a, const void *b)
+{
+	return strcasecmp((const char *)a, (const char *)b);
+}
+
+/* ---------------- pack reader ---------------- */
+
+/* Read a line up to LF, strip CR/LF. Returns length read (>=0) or -1 on EOF. */
+static int pack_readline(FIL *fp, char *out, size_t outsz)
+{
+	size_t i = 0;
+	UINT br;
+	while (i + 1 < outsz)
+	{
+		char c;
+		if (f_read(fp, &c, 1, &br) != FR_OK || br != 1)
+			return (i == 0) ? -1 : (int)i;
+		if (c == '\n') break;
+		if (c == '\r') continue;
+		out[i++] = c;
+	}
+	out[i] = 0;
+	return (int)i;
+}
+
+/* Open the pack, validate magic, read count. Returns false on failure. */
+static bool pack_open(FIL *fp, const char *path, uint32_t *out_count)
+{
+	if (f_open(fp, path, FA_OPEN_EXISTING | FA_READ) != FR_OK) return false;
+	char line[16];
+	if (pack_readline(fp, line, sizeof(line)) < 0 ||
+	    strcmp(line, PACK_MAGIC) != 0)
+	{
+		f_close(fp);
+		return false;
+	}
+	if (pack_readline(fp, line, sizeof(line)) < 0)
+	{
+		f_close(fp);
+		return false;
+	}
+	*out_count = (uint32_t)strtoul(line, NULL, 10);
+	return true;
+}
+
+/* Read next entry header from current position. Returns:
+ *   1 = ok (fp left at payload start; *name + *len filled)
+ *   0 = end of pack
+ *  -1 = malformed
+ */
+static int pack_next_header(FIL *fp, char *name, size_t namesz, uint32_t *out_len)
+{
+	int n = pack_readline(fp, name, namesz);
+	if (n < 0) return 0;
+	if (n == 0) return -1;
+	char lenbuf[16];
+	if (pack_readline(fp, lenbuf, sizeof(lenbuf)) <= 0) return -1;
+	*out_len = (uint32_t)strtoul(lenbuf, NULL, 10);
+	return 1;
+}
+
+/* Advance fp past `len` bytes (skip a payload). */
+static bool pack_skip(FIL *fp, uint32_t len)
+{
+	return f_lseek(fp, f_tell(fp) + len) == FR_OK;
+}
+
+/* Stream-copy `len` bytes from fp into dst_path. Overwrites existing. */
+static bool pack_extract(FIL *fp, uint32_t len, const char *dst_path)
+{
+	FIL out;
+	if (f_open(&out, dst_path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK)
+		return false;
+	uint8_t buf[256];
+	uint32_t left = len;
+	bool ok = true;
+	while (left > 0)
+	{
+		UINT want = (left > sizeof(buf)) ? sizeof(buf) : (UINT)left;
+		UINT br, bw;
+		if (f_read(fp, buf, want, &br) != FR_OK || br == 0) { ok = false; break; }
+		if (f_write(&out, buf, br, &bw) != FR_OK || bw != br) { ok = false; break; }
+		left -= br;
+	}
+	f_close(&out);
+	if (!ok) f_unlink(dst_path);
+	return ok;
+}
+
+/* Pass 1: enumerate every model header, collect unique brand prefixes. */
+static bool collect_brands(const char *pack_path)
+{
+	s_brand_count = 0;
+	FIL fp;
+	uint32_t count;
+	if (!pack_open(&fp, pack_path, &count)) return false;
+	char name[96];
+	uint32_t len;
+	for (uint32_t i = 0; i < count; i++)
+	{
+		int rc = pack_next_header(&fp, name, sizeof(name), &len);
+		if (rc != 1) break;
+		if (!pack_skip(&fp, len)) break;
+		char brand[BRAND_LEN];
+		brand_of(name, brand, sizeof(brand));
+		if (!brand[0]) continue;
+		bool dup = false;
+		for (int b = 0; b < s_brand_count; b++)
+			if (!strcasecmp(s_brands[b], brand)) { dup = true; break; }
+		if (dup) continue;
+		if (s_brand_count >= MAX_BRANDS) break;
+		snprintf(s_brands[s_brand_count++], BRAND_LEN, "%s", brand);
+	}
+	f_close(&fp);
+	qsort(s_brands, s_brand_count, BRAND_LEN, brand_cmp);
+	return s_brand_count > 0;
+}
+
+/* ---------------- brand picker ---------------- */
+
+static void draw_picker(const char *header, int cursor, int top)
+{
+	int total = s_brand_count + 1;
+	m1_u8g2_firstpage();
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+	u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
+	u8g2_DrawStr(&m1_u8g2, 2, ROW_H, header);
+	for (int r = 0; r < PICK_ROWS; r++)
+	{
+		int idx = top + r;
+		if (idx >= total) break;
+		const char *label = (idx == 0) ? "<All brands>" : s_brands[idx - 1];
+		int y = 14 + ROW_H + r * ROW_H;
+		if (idx == cursor)
+			u8g2_DrawStr(&m1_u8g2, 2, y, ">");
+		u8g2_DrawStr(&m1_u8g2, 10, y, label);
+	}
+	m1_u8g2_nextpage();
+}
+
+static int pick_brand(const char *header, char *out_brand, size_t outsz)
+{
+	int cursor = 0, top = 0;
+	int total = s_brand_count + 1;
+	draw_picker(header, cursor, top);
+	for (;;)
+	{
+		S_M1_Main_Q_t q;
+		if (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) != pdTRUE) continue;
+		if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
+		S_M1_Buttons_Status b;
+		if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
+		if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) return 0;
+		if (b.event[BUTTON_OK_KP_ID]   == BUTTON_EVENT_CLICK)
+		{
+			if (cursor == 0) out_brand[0] = 0;
+			else snprintf(out_brand, outsz, "%s", s_brands[cursor - 1]);
+			return 1;
+		}
+		bool moved = false;
+		if (b.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (cursor > 0) { cursor--; moved = true; }
+			if (cursor < top) top = cursor;
+		}
+		if (b.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (cursor + 1 < total) { cursor++; moved = true; }
+			if (cursor >= top + PICK_ROWS) top = cursor - PICK_ROWS + 1;
+		}
+		if (moved) draw_picker(header, cursor, top);
+	}
+}
+
+/* ---------------- transmit + handoff ---------------- */
+
 static bool transmit_power_from_file(const char *path, uint8_t remote_type)
 {
 	if (ir_remote_file_header_check(path, remote_type)) return false;
@@ -269,30 +369,6 @@ static bool transmit_power_from_file(const char *path, uint8_t remote_type)
 	return true;
 }
 
-/* Copy a small file (≤4 KB — one model entry). */
-static bool copy_file(const char *src, const char *dst)
-{
-	FIL fs, fd;
-	if (m1_sdcard_get_status() != SD_access_OK) return false;
-	if (f_open(&fs, src, FA_OPEN_EXISTING | FA_READ) != FR_OK) return false;
-	/* Create parent dir best-effort. */
-	f_mkdir("0:/INFRARED/saved");
-	if (f_open(&fd, dst, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) { f_close(&fs); return false; }
-	uint8_t buf[256];
-	UINT br, bw;
-	bool ok = true;
-	while (f_read(&fs, buf, sizeof(buf), &br) == FR_OK && br > 0)
-	{
-		if (f_write(&fd, buf, br, &bw) != FR_OK || bw != br) { ok = false; break; }
-	}
-	f_close(&fs);
-	f_close(&fd);
-	return ok;
-}
-
-/* Hand off to the existing universal-remote button grid, pointed at
- * the locked file. The override is held in s_locked_path so the
- * pointer stays valid during the grid run. */
 static void handoff_to_grid(uint8_t remote_type, const char *path)
 {
 	snprintf(s_locked_path, sizeof(s_locked_path), "%s", path);
@@ -301,23 +377,40 @@ static void handoff_to_grid(uint8_t remote_type, const char *path)
 	ir_set_db_path_override(NULL);
 }
 
+/* ---------------- main flows ---------------- */
+
+static void wait_back(void)
+{
+	S_M1_Main_Q_t q;
+	S_M1_Buttons_Status b;
+	while (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) == pdTRUE)
+	{
+		if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
+		if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
+		if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) break;
+	}
+	xQueueReset(main_q_hdl);
+}
+
 static void discover_run(uint8_t remote_type)
 {
 	if (remote_type >= IR_REMOTETYPE_UNKNOWN) return;
 	const char *header = header_for(remote_type);
-	const char *dir    = browse_dir_for(remote_type);
+	const char *pack   = pack_path_for(remote_type);
 
 	if (m1_sdcard_get_status() != SD_access_OK)
 	{
 		draw_screen(header, "No SD card", "", "BACK to return");
-		goto wait_back;
+		wait_back();
+		return;
 	}
 
-	/* Brand picker: extract unique prefixes, let user filter. */
-	if (!collect_brands(dir))
+	draw_screen(header, "Loading pack...", NULL, NULL);
+	if (!collect_brands(pack))
 	{
-		draw_screen(header, "No models found:", dir + 2, "BACK to return");
-		goto wait_back;
+		draw_screen(header, "No pack file:", pack + 2, "BACK to return");
+		wait_back();
+		return;
 	}
 	char brand_filter[BRAND_LEN] = "";
 	if (!pick_brand(header, brand_filter, sizeof(brand_filter)))
@@ -326,11 +419,13 @@ static void discover_run(uint8_t remote_type)
 		return;
 	}
 
-	DIR d;
-	if (f_opendir(&d, dir) != FR_OK)
+	FIL fp;
+	uint32_t count;
+	if (!pack_open(&fp, pack, &count))
 	{
-		draw_screen(header, "No browse dir:", dir + 2, "BACK to return");
-		goto wait_back;
+		draw_screen(header, "Pack reopen fail", NULL, "BACK to return");
+		wait_back();
+		return;
 	}
 
 	infrared_encode_sys_init();
@@ -339,45 +434,37 @@ static void discover_run(uint8_t remote_type)
 	else
 		draw_screen(header, "Cycling models...", "OK = lock", "BACK = abort");
 
-	FILINFO fi;
 	bool aborted = false;
-	bool locked = false;
-	char locked_path[80] = "";
+	bool locked  = false;
 	uint32_t fired = 0;
+	char name[96];
 
-	while (!aborted && !locked)
+	for (uint32_t i = 0; i < count && !aborted && !locked; i++)
 	{
-		FRESULT rr = f_readdir(&d, &fi);
-		if (rr != FR_OK || fi.fname[0] == 0)
-			break;  /* end of directory */
-		if (fi.fattrib & (AM_DIR | AM_HID | AM_SYS))
-			continue;
-		/* Filter on .ir extension. */
-		size_t n = strlen(fi.fname);
-		if (n < 4 || strcasecmp(&fi.fname[n - 3], ".ir") != 0)
-			continue;
+		uint32_t len;
+		int rc = pack_next_header(&fp, name, sizeof(name), &len);
+		if (rc != 1) break;
+
 		if (brand_filter[0])
 		{
 			char fb[BRAND_LEN];
-			brand_of(fi.fname, fb, sizeof(fb));
-			if (strcasecmp(fb, brand_filter) != 0) continue;
+			brand_of(name, fb, sizeof(fb));
+			if (strcasecmp(fb, brand_filter) != 0)
+			{
+				pack_skip(&fp, len);
+				continue;
+			}
 		}
 
-		char path[100];
-		snprintf(path, sizeof(path), "%s/%s", dir, fi.fname);
+		if (!pack_extract(&fp, len, PACK_TMP)) continue;
 
 		fired++;
 		char line[24];
-		snprintf(line, sizeof(line), "%lu: %.18s",
-		         (unsigned long)fired, fi.fname);
+		snprintf(line, sizeof(line), "%lu: %.18s", (unsigned long)fired, name);
 		draw_screen(header, line, "OK=lock BACK=quit", NULL);
 
-		(void)transmit_power_from_file(path, remote_type);
+		(void)transmit_power_from_file(PACK_TMP, remote_type);
 
-		/* Wait DISCOVER_PAUSE_MS for either:
-		 *  - a Q_EVENT_IRRED_TX (current transmission complete) -> advance
-		 *  - a keypad event (OK locks, BACK aborts)
-		 */
 		TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(DISCOVER_PAUSE_MS);
 		while (!aborted && !locked && xTaskGetTickCount() < deadline)
 		{
@@ -386,56 +473,44 @@ static void discover_run(uint8_t remote_type)
 			TickType_t to = (deadline > now) ? (deadline - now) : 0;
 			if (to == 0) break;
 			if (xQueueReceive(main_q_hdl, &q, to) != pdTRUE) break;
-			if (q.q_evt_type == Q_EVENT_KEYPAD)
-			{
-				S_M1_Buttons_Status b;
-				if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
-				if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) { aborted = true; break; }
-				if (b.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK)
-				{
-					locked = true;
-					snprintf(locked_path, sizeof(locked_path), "%s", path);
-					break;
-				}
-			}
-			/* Q_EVENT_IRRED_TX (transmit complete) — drain so we don't
-			 * spin, but otherwise no action. */
+			if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
+			S_M1_Buttons_Status b;
+			if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
+			if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) { aborted = true; break; }
+			if (b.event[BUTTON_OK_KP_ID]   == BUTTON_EVENT_CLICK) { locked  = true;  break; }
 		}
 	}
-	f_closedir(&d);
+	f_close(&fp);
 
 	if (ir_ota_data_tx_active)
 		m1_ir_ota_frame_repeat_handler(IRMP_UNKNOWN_PROTOCOL);
 
 	if (aborted)
 	{
+		f_unlink(PACK_TMP);
 		xQueueReset(main_q_hdl);
 		return;
 	}
-
 	if (!locked)
 	{
+		f_unlink(PACK_TMP);
 		draw_screen(header, "End of list.", "No model locked.", "BACK to return");
-		goto wait_back;
+		wait_back();
+		return;
 	}
 
-	/* Persist Last + drop into the button grid. */
-	(void)copy_file(locked_path, last_path_for(remote_type));
-	handoff_to_grid(remote_type, locked_path);
-	return;
-
-wait_back:
+	/* Lock: promote temp file to the permanent Last slot. */
+	const char *last = last_path_for(remote_type);
+	f_mkdir("0:/INFRARED/saved");
+	f_unlink(last);  /* f_rename refuses to overwrite. */
+	if (f_rename(PACK_TMP, last) != FR_OK)
 	{
-		S_M1_Main_Q_t q;
-		S_M1_Buttons_Status b;
-		while (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) == pdTRUE)
-		{
-			if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
-			if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
-			if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) break;
-		}
-		xQueueReset(main_q_hdl);
+		/* Fallback: keep temp around and hand off pointing at it. */
+		handoff_to_grid(remote_type, PACK_TMP);
+		f_unlink(PACK_TMP);
+		return;
 	}
+	handoff_to_grid(remote_type, last);
 }
 
 static void last_run(uint8_t remote_type)
@@ -447,14 +522,7 @@ static void last_run(uint8_t remote_type)
 	    || f_open(&fp, path, FA_OPEN_EXISTING | FA_READ) != FR_OK)
 	{
 		draw_screen(header, "No saved Last.", "Use Find My first.", "BACK to return");
-		S_M1_Main_Q_t q;
-		S_M1_Buttons_Status b;
-		while (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) == pdTRUE)
-		{
-			if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
-			if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
-			if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) break;
-		}
+		wait_back();
 		return;
 	}
 	f_close(&fp);

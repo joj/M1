@@ -234,16 +234,20 @@ if "%SKIP_IRDB%"=="0" (
         echo ERROR: failed to copy IR database to %DRIVE%\INFRARED\db\.
         exit /b 1
     )
-    REM Also stage per-model files for the Find My Remote discovery flow.
+    REM Per-model .pack bundles for the Find My Remote discovery flow.
+    REM Each is a single sequential file (~50-280 KB) — way faster to
+    REM stage than the old 749-tiny-file tree.
     if exist "%IRDB_SRC%\browse\" (
         if not exist "%DRIVE%\INFRARED\browse\" mkdir "%DRIVE%\INFRARED\browse" 2>nul
-        echo   IR browse: copying ~750 small files, may take 30-60s...
-        xcopy /Y /E /I "%IRDB_SRC%\browse" "%DRIVE%\INFRARED\browse" >nul
+        copy /Y "%IRDB_SRC%\browse\tv.pack"        "%DRIVE%\INFRARED\browse\" >nul
+        copy /Y "%IRDB_SRC%\browse\audio.pack"     "%DRIVE%\INFRARED\browse\" >nul
+        copy /Y "%IRDB_SRC%\browse\projector.pack" "%DRIVE%\INFRARED\browse\" >nul
+        copy /Y "%IRDB_SRC%\browse\ac.pack"        "%DRIVE%\INFRARED\browse\" >nul
         if errorlevel 1 (
-            echo ERROR: failed to copy IR browse tree to %DRIVE%\INFRARED\browse\.
+            echo ERROR: failed to copy IR pack bundles to %DRIVE%\INFRARED\browse\.
             exit /b 1
         )
-        echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir + browse\ done
+        echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir + browse\*.pack
     ) else (
         echo   IR db:     %DRIVE%\INFRARED\db\{tv,audio,projector,ac}.ir
     )
