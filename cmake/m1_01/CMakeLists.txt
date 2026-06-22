@@ -315,6 +315,8 @@ target_sources(m1_01 INTERFACE
     ../../Sub_Ghz/datatypes_utils.c
     ../../Sub_Ghz/m1_sub_ghz_api.c
     ../../Sub_Ghz/m1_sub_ghz_decenc.c
+    ../../Sub_Ghz/m1_sub_ghz_sgv.c
+    ../../Sub_Ghz/m1_sub_ghz_validate.c
     ../../Sub_Ghz/protocols/m1_princeton_decode.c
     ../../Sub_Ghz/protocols/m1_secplus_v2_decode.c
     ../../USB/Class/CDC/Src/usbd_cdc.c

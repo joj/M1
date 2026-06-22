@@ -36,6 +36,7 @@ See [HARDWARE.md](HARDWARE.md) for more details.
 - [WiFi WPA-PSK Dictionary Attack](documentation/wifi_dict_attack.md) – Long-press OK on a scanned wifi AP to run an online dictionary attack
 - [WiFi Handshake / PMKID Capture](documentation/wifi_handshake_capture.md) – Long-press OK → "Capture hand" → hashcat .22000 files on SD
 - [Flipper IR compat + Mass Off](documentation/ir_flipper_compat.md) – Use the Flipper-IRDB, "TV-Be-Gone"-style Mass Off, export learned signals back to Flipper
+- [Sub-GHz Validate](documentation/subghz_validate.md) – Compare a fresh remote press against a saved recording; verdict shows identical / rolling / same-family / no-match
 
 ## Building
 

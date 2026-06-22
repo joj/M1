@@ -323,6 +323,9 @@ bool subghz_decenc_read(SubGHz_Dec_Info_t *received, bool raw)
             received->rssi = subghz_decenc_ctl.subghz_get_decoded_rssi();
             received->te = subghz_decenc_ctl.subghz_get_decoded_delay();
             received->bit_len = subghz_decenc_ctl.subghz_get_decoded_bitlength();
+            received->serial = subghz_decenc_ctl.n32_serialnumber;
+            received->rolling = subghz_decenc_ctl.n32_rollingcode;
+            received->button_id = subghz_decenc_ctl.n8_buttonid;
         } // if (value)
         subghz_decenc_ctl.subghz_reset_data();
         ret = true;

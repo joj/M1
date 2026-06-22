@@ -136,6 +136,7 @@ void menu_sub_ghz_exit(void);
 void sub_ghz_init(void);
 void sub_ghz_record(void);
 void sub_ghz_replay(void);
+void sub_ghz_validate(void);
 void sub_ghz_frequency_reader(void);
 void sub_ghz_regional_information(void);
 void sub_ghz_radio_settings(void);

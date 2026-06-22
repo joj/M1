@@ -23,6 +23,9 @@
 #include "m1_sub_ghz_api.h"
 //#include "m1_sub_ghz.h"
 #include "m1_sub_ghz_decenc.h"
+#include "m1_sub_ghz_sgv.h"
+#include "m1_sub_ghz_validate.h"
+#include "m1_sub_ghz_validate.h"
 #include "m1_ring_buffer.h"
 #include "m1_storage.h"
 #include "m1_sdcard_man.h"
@@ -286,6 +289,7 @@ void menu_sub_ghz_exit(void);
 void sub_ghz_init(void);
 void sub_ghz_record(void);
 void sub_ghz_replay(void);
+void sub_ghz_validate(void);
 void sub_ghz_frequency_reader(void);
 void sub_ghz_regional_information(void);
 void sub_ghz_radio_settings(void);
@@ -2863,3 +2867,210 @@ void sub_ghz_display(SubGHz_Dec_Info_t decoded_data)
     subghz_decenc_ctl.subghz_reset_data();
 
 } // void sub_ghz_display(SubGHz_Dec_Info_t decoded_data)
+
+
+/*============================================================================*/
+/*
+ * Phase 6 — Validate.
+ *
+ * Pick a saved .sgv -> set the radio to the saved freq/mod -> enter RX ->
+ * on the first decoded packet, render the verdict from
+ * m1_subghz_validate().
+ *
+ * Uses a procedural (not uiView) loop similar to wifi-attack-ui so we
+ * don't interfere with Record/Replay state machines.
+ */
+/*============================================================================*/
+
+#define VALIDATE_RX_TIMEOUT_MS    30000  /* abort listening after 30 s */
+
+static void validate_draw_prompt(const char *ssid_like)
+{
+m1_u8g2_firstpage();
+u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
+u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_FONT_HEIGHT, "Validate");
+
+int y = 14 + M1_GUI_FONT_HEIGHT;
+char buf[24];
+snprintf(buf, sizeof(buf), "%.20s", ssid_like ? ssid_like : "?");
+u8g2_DrawStr(&m1_u8g2, 2, y, buf); y += M1_GUI_FONT_HEIGHT;
+u8g2_DrawStr(&m1_u8g2, 2, y, "Press the remote..."); y += M1_GUI_FONT_HEIGHT;
+u8g2_DrawStr(&m1_u8g2, 2, y + M1_GUI_FONT_HEIGHT, "BACK to abort");
+m1_u8g2_nextpage();
+}
+
+static void validate_draw_verdict(m1_validate_verdict_t v, int32_t counter_delta,
+                                  const SubGHz_Dec_Info_t *saved,
+                                  const SubGHz_Dec_Info_t *fresh)
+{
+m1_u8g2_firstpage();
+u8g2_SetDrawColor(&m1_u8g2, M1_DISP_DRAW_COLOR_TXT);
+u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
+u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_FONT_HEIGHT, "Verdict");
+
+int y = 14 + M1_GUI_FONT_HEIGHT;
+u8g2_DrawStr(&m1_u8g2, 2, y, m1_subghz_validate_label(v)); y += M1_GUI_FONT_HEIGHT;
+
+char buf[24];
+if (v == M1_VALIDATE_MATCH_ROLLING)
+{
+snprintf(buf, sizeof(buf), "counter +%ld", (long)counter_delta);
+u8g2_DrawStr(&m1_u8g2, 2, y, buf); y += M1_GUI_FONT_HEIGHT;
+}
+else if (v == M1_VALIDATE_MATCH_IDENTICAL && saved && fresh && saved->serial != 0)
+{
+u8g2_DrawStr(&m1_u8g2, 2, y, "REPLAY RISK"); y += M1_GUI_FONT_HEIGHT;
+}
+else if (v == M1_VALIDATE_MATCH_IDENTICAL)
+{
+u8g2_DrawStr(&m1_u8g2, 2, y, "fixed code, replayable"); y += M1_GUI_FONT_HEIGHT;
+}
+
+if (fresh)
+{
+snprintf(buf, sizeof(buf), "proto:%u key:0x%llX",
+ (unsigned)fresh->protocol, (unsigned long long)fresh->key);
+u8g2_DrawStr(&m1_u8g2, 2, y, buf); y += M1_GUI_FONT_HEIGHT;
+}
+u8g2_DrawStr(&m1_u8g2, 2, y + M1_GUI_FONT_HEIGHT, "BACK to return");
+m1_u8g2_nextpage();
+}
+
+void sub_ghz_validate(void)
+{
+S_M1_file_info *fi;
+SubGHz_Dec_Info_t saved = {0};
+uint32_t saved_freq_hz = 0;
+char saved_mod[8] = "";
+char sgv_path[160];
+
+menu_sub_ghz_init();
+xQueueReset(main_q_hdl);
+
+/* 1) Pick a .sgv file. We reuse the same browser the Replay screen
+ * uses; it scans 0:/SUBGHZ/ for files. The Validate UI then accepts
+ * only entries ending in .sgv. */
+while (true)
+{
+fi = storage_browse();
+if (!fi || !fi->file_is_selected)
+{
+menu_sub_ghz_exit();
+return;
+}
+/* Filter on extension. */
+size_t name_len = strlen(fi->file_name);
+if (name_len > 4 && strcasecmp(&fi->file_name[name_len - 4], M1_SGV_FILE_EXTENSION) == 0)
+break;
+m1_message_box(&m1_u8g2, "Pick a .sgv file.", "", "", "BACK to return");
+}
+
+snprintf(sgv_path, sizeof(sgv_path), "%s/%s", fi->dir_name, fi->file_name);
+if (!m1_sgv_read_file(sgv_path, &saved, &saved_freq_hz, saved_mod, sizeof(saved_mod)))
+{
+m1_message_box(&m1_u8g2, "Bad .sgv file", "", "", "BACK to return");
+menu_sub_ghz_exit();
+return;
+}
+
+/* 2) Set up the radio for the saved freq/mod. We do a coarse band
+ * match — the same logic Replay uses. */
+S_M1_SubGHz_Band band = SUB_GHZ_BAND_915;
+{
+float freq_mhz = (float)saved_freq_hz / 1000000.0f;
+for (uint8_t b = 0; b < SUB_GHZ_BAND_EOL; b++)
+{
+float fmin = subghz_band_steps[b][0];
+float fmax = fmin + 0.25f * subghz_band_steps[b][1];
+if (freq_mhz >= fmin && freq_mhz <= fmax) { band = (S_M1_SubGHz_Band)b; break; }
+}
+}
+
+if (sub_ghz_ring_buffers_init() != 0)
+{
+m1_message_box(&m1_u8g2, "Mem error", "", "", "BACK to return");
+menu_sub_ghz_exit();
+return;
+}
+
+subghz_decenc_ctl.pulse_det_stat = PULSE_DET_ACTIVE;
+subghz_decenc_ctl.subghz_reset_data();
+sub_ghz_set_opmode(SUB_GHZ_OPMODE_RX, band, 0, 0);
+SI446x_Change_Modem_OOK_PDTC(SUB_GHZ_433_92_NEW_PDTC);
+sub_ghz_rx_init();
+sub_ghz_rx_start();
+m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_M, LED_FASTBLINK_ONTIME_M);
+
+validate_draw_prompt(fi->file_name);
+
+/* 3) Listen loop. */
+S_M1_Main_Q_t q_item;
+TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(VALIDATE_RX_TIMEOUT_MS);
+bool aborted = false;
+bool got_packet = false;
+SubGHz_Dec_Info_t fresh = {0};
+
+while (!got_packet && !aborted)
+{
+TickType_t now = xTaskGetTickCount();
+TickType_t to = (deadline > now) ? (deadline - now) : 0;
+if (to == 0) break;
+if (xQueueReceive(main_q_hdl, &q_item, to) != pdTRUE) break;
+
+if (q_item.q_evt_type == Q_EVENT_KEYPAD)
+{
+S_M1_Buttons_Status b;
+if (xQueueReceive(button_events_q_hdl, &b, 0) == pdTRUE
+&& b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK)
+{
+aborted = true;
+}
+}
+else if (q_item.q_evt_type == Q_EVENT_SUBGHZ_RX)
+{
+/* The radio's interrupt path has been feeding the
+ * pulse-handler; the decoder's data_ready flag is set
+ * when a full packet is recognised. */
+if (subghz_decenc_ctl.subghz_data_ready())
+{
+if (subghz_decenc_read(&fresh, false))
+{
+got_packet = true;
+}
+}
+}
+}
+
+sub_ghz_rx_pause();
+sub_ghz_rx_deinit();
+sub_ghz_set_opmode(SUB_GHZ_OPMODE_ISOLATED, band, 0, 0);
+sub_ghz_ring_buffers_deinit();
+m1_led_fast_blink(LED_BLINK_ON_RGB, LED_FASTBLINK_PWM_OFF, LED_FASTBLINK_ONTIME_OFF);
+
+/* 4) Render verdict or "timed out" message. */
+if (!got_packet && !aborted)
+{
+m1_message_box(&m1_u8g2, "Timed out.", "", "No packet received.", "BACK to return");
+}
+else if (got_packet)
+{
+int32_t delta = 0;
+m1_validate_verdict_t v = m1_subghz_validate(&saved, &fresh, &delta);
+validate_draw_verdict(v, delta, &saved, &fresh);
+}
+
+/* Wait for BACK. */
+while (true)
+{
+if (xQueueReceive(main_q_hdl, &q_item, portMAX_DELAY) != pdTRUE) continue;
+if (q_item.q_evt_type != Q_EVENT_KEYPAD) continue;
+S_M1_Buttons_Status b;
+if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
+if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) break;
+}
+xQueueReset(main_q_hdl);
+menu_sub_ghz_exit();
+} /* void sub_ghz_validate(void) */

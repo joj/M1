@@ -51,6 +51,11 @@ S_M1_Menu_t menu_Sub_GHz_Replay =
     "Replay", sub_ghz_replay, NULL, NULL, 0, 0, NULL, NULL, NULL
 };
 
+S_M1_Menu_t menu_Sub_GHz_Validate =
+{
+    "Validate", sub_ghz_validate, NULL, NULL, 0, 0, NULL, NULL, NULL
+};
+
 S_M1_Menu_t menu_Sub_GHz_Frequency_Reader =
 {
     "Frequency Reader", sub_ghz_frequency_reader, NULL, NULL, 0, 0, NULL, NULL, NULL
@@ -68,8 +73,9 @@ S_M1_Menu_t menu_Sub_GHz_Radio_Settings =
 
 S_M1_Menu_t menu_Sub_GHz =
 {
-    "Sub-GHz", NULL, NULL, NULL, 4, 0, menu_m1_icon_wave, NULL,
-    {&menu_Sub_GHz_Record, &menu_Sub_GHz_Replay, &menu_Sub_GHz_Frequency_Reader, &menu_Sub_GHz_Regional_Information}
+    "Sub-GHz", NULL, NULL, NULL, 5, 0, menu_m1_icon_wave, NULL,
+    {&menu_Sub_GHz_Record, &menu_Sub_GHz_Replay, &menu_Sub_GHz_Validate,
+     &menu_Sub_GHz_Frequency_Reader, &menu_Sub_GHz_Regional_Information}
 };
 
 /*----------------------------- > 125KHz RFID --------------------------------*/

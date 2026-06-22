@@ -103,6 +103,43 @@ actually connects during the capture window.
 
 ---
 
+## Sub-GHz (Menu → Sub-GHz)
+
+```
+Sub-GHz
+ ├── Record               (existing — raw pulse capture)
+ ├── Replay               (existing — replay saved .sgh)
+ ├── Validate             ← new
+ ├── Frequency Reader     (existing)
+ └── Regional Information (existing)
+```
+
+### Validate
+
+Compare a fresh remote press against a saved recording.
+
+Workflow:
+1. Use **Record** as usual on the remote you want to fingerprint —
+   if the protocol decodes (PT2262/Princeton, Security+ 2.0, ...) a
+   tiny `.sgv` sidecar is written next to the `.sgh`.
+2. *Menu → Sub-GHz → Validate*. File browser opens. Pick the `.sgv`.
+3. M1 enters RX on the saved frequency. Screen: "Press the remote..."
+4. Press the remote. M1 captures one decoded packet and shows the
+   verdict:
+
+| Verdict | Meaning |
+|---|---|
+| **MATCH (identical)** | Bit-equal. Replay-attack works (for fixed code), or replay-in-progress (for rolling code — flagged **REPLAY RISK**). |
+| **MATCH (rolling +N)** | Same physical remote, counter advanced by N. Security is working. |
+| **MATCH (same family)** | Same protocol, different serial — sibling remote. |
+| **NO MATCH** | Different protocol or fixed-code bits differ. |
+
+BACK aborts; 30 s timeout if nothing arrives.
+
+Deep dive: [documentation/subghz_validate.md](subghz_validate.md).
+
+---
+
 ## Bluetooth (Menu → Bluetooth → Scan)
 
 ### Scan view

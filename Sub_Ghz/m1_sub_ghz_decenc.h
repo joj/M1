@@ -80,6 +80,12 @@ typedef struct
     uint16_t te;
     uint16_t bit_len;
     bool raw;
+    /* Phase 6 (Validate): populated by subghz_decenc_read() from
+     * subghz_decenc_ctl when available, so the verdict engine doesn't
+     * have to peek at globals. Both zero for fixed-code protocols. */
+    uint32_t serial;
+    uint32_t rolling;
+    uint8_t  button_id;
 } SubGHz_Dec_Info_t;
 
 enum {
