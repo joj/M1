@@ -40,4 +40,17 @@ uint8_t ble_gatt_primsrv(ctrl_cmd_t *app_req, int conn_idx);
 uint8_t ble_gatt_chars(ctrl_cmd_t *app_req, int conn_idx, int srv_idx);
 uint8_t ble_gatt_read(ctrl_cmd_t *app_req, int conn_idx, int srv_idx, int char_idx);
 
+/* Phase 3 — WiFi dictionary-attack wrappers.
+ *
+ * wifi_set_station_mode: AT+CWMODE=1.
+ * wifi_try_connect: AT+CWJAP="<ssid>","<pwd>" with a bounded timeout.
+ *   Populates app_req->u.wifi_try with try_status + at_err_code.
+ * wifi_disconnect_ap: AT+CWQAP.
+ */
+uint8_t wifi_set_station_mode(ctrl_cmd_t *app_req);
+uint8_t wifi_try_connect(ctrl_cmd_t *app_req,
+                         const char *ssid, const char *pwd,
+                         int timeout_sec);
+uint8_t wifi_disconnect_ap(ctrl_cmd_t *app_req);
+
 #endif /* ESP_APP_MAIN_H_ */

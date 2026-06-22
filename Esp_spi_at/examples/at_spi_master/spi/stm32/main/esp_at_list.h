@@ -64,4 +64,15 @@
 
 #define ESP32C6_AT_RESET				"AT+RST"
 
+/* Phase 3 — WPA station/join (dictionary-attack feature).
+ *   AT+CWMODE=1                   -> station mode
+ *   AT+CWJAP="<ssid>","<pwd>"     -> connect; OK / +CWJAP:<err> / FAIL
+ *   AT+CWQAP                      -> disconnect
+ */
+#define ESP32C6_AT_REQ_STATION_MODE   "AT+CWMODE=1"
+#define ESP32C6_AT_REQ_CWJAP          "AT+CWJAP="
+#define ESP32C6_AT_REQ_CWQAP          "AT+CWQAP"
+#define ESP32C6_AT_RES_CWJAP_FAIL_KEY "+CWJAP:"
+#define ESP32C6_AT_RES_FAIL           "FAIL"
+
 #endif /* ESP32C6_AT_LIST_H_ */

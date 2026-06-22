@@ -24,6 +24,7 @@
 #include "ctrl_api.h"
 #include "esp_app_main.h"
 #include "m1_oui_lookup.h"
+#include "m1_wifi_attack_ui.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -49,6 +50,22 @@ void wifi_config(void);
 
 static uint16_t wifi_ap_list_print(ctrl_cmd_t *app_resp, bool up_dir);
 static uint8_t wifi_ap_list_validation(ctrl_cmd_t *app_resp);
+
+static const wifi_scanlist_t *g_wifi_scan_selected = NULL;
+
+/* Allows the long-press handler to retrieve the currently-displayed entry. */
+bool wifi_scan_get_selected_ssid_bssid(char *ssid_out, size_t ssid_out_size,
+                                       char *bssid_out, size_t bssid_out_size)
+{
+	if (!g_wifi_scan_selected) return false;
+	if (ssid_out && ssid_out_size)
+		snprintf(ssid_out, ssid_out_size, "%s",
+		         (const char *)g_wifi_scan_selected->ssid);
+	if (bssid_out && bssid_out_size)
+		snprintf(bssid_out, bssid_out_size, "%s",
+		         (const char *)g_wifi_scan_selected->bssid);
+	return true;
+}
 
 /*************** F U N C T I O N   I M P L E M E N T A T I O N ****************/
 
@@ -187,6 +204,20 @@ void wifi_scan_ap(void)
 				{
 					; // Do other things for this task, if needed
 				}
+				else if ( this_button_status.event[BUTTON_OK_KP_ID]==BUTTON_EVENT_LCLICK ) // Long-press OK: dictionary attack
+				{
+					char sel_ssid[SSID_LENGTH];
+					char sel_bssid[BSSID_STR_SIZE];
+					if (list_count &&
+					    wifi_scan_get_selected_ssid_bssid(sel_ssid, sizeof(sel_ssid),
+					                                     sel_bssid, sizeof(sel_bssid)))
+					{
+						m1_wifi_attack_ui_run(sel_ssid, sel_bssid);
+						/* Redraw current AP on return. */
+						if (list_count)
+							wifi_ap_list_print(&app_req, true);
+					}
+				}
 			} // if ( q_item.q_evt_type==Q_EVENT_KEYPAD )
 			else
 			{
@@ -307,6 +338,8 @@ static uint16_t wifi_ap_list_print(ctrl_cmd_t *app_resp, bool up_dir)
 	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
 
 	m1_u8g2_nextpage(); // Update display RAM
+
+	g_wifi_scan_selected = &list[i];
 
 	M1_LOG_D(M1_LOGDB_TAG, "%d) ssid \"%s\" bssid \"%s\" rssi \"%d\" channel \"%d\" auth mode \"%d\" \n\r",\
 						i, list[i].ssid, list[i].bssid, list[i].rssi,

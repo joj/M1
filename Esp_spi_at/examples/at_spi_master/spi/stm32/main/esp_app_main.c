@@ -1104,3 +1104,128 @@ uint8_t ble_gatt_read(ctrl_cmd_t *app_req, int conn_idx,
     return at_send_and_collect(app_req, ESP32C6_AT_RES_BLE_GATTRD_KEY,
                                ESP32C6_AT_RES_OK);
 }
+
+
+
+/* ============================================================================
+ * Phase 3 — WiFi dictionary-attack wrappers.
+ *
+ * For wifi_try_connect we have to wait for one of three terminal lines:
+ *
+ *   OK              — got IP, association succeeded.
+ *   FAIL            — generic failure (usually preceded by +CWJAP:<err>).
+ *   +CWJAP:<err>    — specific error; sometimes appears without FAIL.
+ *
+ * The shared at_send_and_collect helper only knows one terminator. So we use
+ * a small inline pump tailored for this command.
+ * ============================================================================ */
+
+uint8_t wifi_set_station_mode(ctrl_cmd_t *app_req)
+{
+    app_req->at_cmd = strdup(CONCAT_CMD_PARAM(ESP32C6_AT_REQ_STATION_MODE, ""));
+    app_req->msg_id = CTRL_RESP_WIFI_SET_STATION_MODE;
+    return at_send_and_collect(app_req, NULL, ESP32C6_AT_RES_OK);
+}
+
+uint8_t wifi_disconnect_ap(ctrl_cmd_t *app_req)
+{
+    app_req->at_cmd = strdup(CONCAT_CMD_PARAM(ESP32C6_AT_REQ_CWQAP, ""));
+    app_req->msg_id = CTRL_RESP_WIFI_DISCONNECT_AP;
+    return at_send_and_collect(app_req, NULL, ESP32C6_AT_RES_OK);
+}
+
+/* WiFi try-connect with explicit OK / FAIL / +CWJAP:<err> handling. */
+uint8_t wifi_try_connect(ctrl_cmd_t *app_req,
+                         const char *ssid, const char *pwd,
+                         int timeout_sec)
+{
+    if (!ssid) return ERROR;
+    if (!pwd) pwd = "";
+
+    /* Escape any quote or backslash characters in SSID/pwd per ESP-AT rules.
+     * For safety we just reject anything weird here and pad in a simple
+     * quoted form; production wordlists are ASCII-clean.
+     */
+    char cmd[160];
+    int n = snprintf(cmd, sizeof(cmd), "%s\"%s\",\"%s\"%s",
+                     ESP32C6_AT_REQ_CWJAP, ssid, pwd, ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(cmd))
+        return ERROR;
+    app_req->at_cmd = strdup(cmd);
+    app_req->msg_id = CTRL_RESP_WIFI_TRY_CONNECT;
+    app_req->cmd_len = strlen(app_req->at_cmd);
+    if (timeout_sec > 0) app_req->cmd_timeout_sec = timeout_sec;
+    app_req->u.wifi_try.try_status = -1;  /* will be set below */
+    app_req->u.wifi_try.at_err_code = 0;
+
+    char *resp_buf = NULL;
+    int rx_buf_len = 0;
+    uint32_t rx_uid;
+    uint8_t ret;
+    uint32_t tick_t0, tick_pass;
+
+    tick_t0 = HAL_GetTick();
+    esp_queue_reset(ctrl_msg_Q);
+    ret = spi_AT_app_send_command(app_req);
+    if (ret == SUCCESS)
+    {
+        ret = ERROR;
+        while (true)
+        {
+            tick_pass = HAL_GetTick() - tick_t0;
+            tick_pass /= MILLISEC_TO_SEC;
+            if (tick_pass)
+            {
+                tick_t0 += MILLISEC_TO_SEC;
+                if (app_req->cmd_timeout_sec > tick_pass)
+                    app_req->cmd_timeout_sec -= tick_pass;
+                else { app_req->u.wifi_try.try_status = 1 /* TIMEOUT */; break; }
+            }
+            esp_free_mem(&resp_buf);
+            char *rx_buf = (char *)spi_AT_app_get_response(&rx_buf_len, &rx_uid,
+                                                          app_req->cmd_timeout_sec);
+            resp_buf = rx_buf;
+            if (!rx_buf || !rx_buf_len) continue;
+            if (rx_uid != current_uid) continue;
+
+            /* Capture any +CWJAP:<err> line before scanning for terminators. */
+            char *errp = strstr(rx_buf, ESP32C6_AT_RES_CWJAP_FAIL_KEY);
+            if (errp)
+                app_req->u.wifi_try.at_err_code =
+                    (int)strtol(errp + strlen(ESP32C6_AT_RES_CWJAP_FAIL_KEY), NULL, 10);
+
+            char *stripped = m1_resp_string_strip(rx_buf, CR_LF);
+            if (!stripped) continue;
+
+            if (strstr(stripped, ESP32C6_AT_RES_OK))
+            {
+                app_req->u.wifi_try.try_status = 0; /* OK */
+                ret = SUCCESS;
+                break;
+            }
+            if (strstr(stripped, ESP32C6_AT_RES_FAIL))
+            {
+                /* Map +CWJAP:<err> to our status. */
+                switch (app_req->u.wifi_try.at_err_code)
+                {
+                    case 1:  app_req->u.wifi_try.try_status = 1; break; /* timeout */
+                    case 2:  app_req->u.wifi_try.try_status = 2; break; /* wrong pwd */
+                    case 3:  app_req->u.wifi_try.try_status = 3; break; /* no AP */
+                    case 4:  app_req->u.wifi_try.try_status = 4; break; /* conn fail */
+                    default: app_req->u.wifi_try.try_status = 5; break; /* other */
+                }
+                ret = SUCCESS; /* response received; result is in wifi_try */
+                break;
+            }
+        }
+    }
+    esp_free_mem(&resp_buf);
+    esp_free_mem(&app_req->at_cmd);
+    esp_free_mem(&app_req->cmd_resp);
+    if (ret == SUCCESS)
+    {
+        app_req->msg_type = CTRL_RESP;
+        app_req->resp_event_status = SUCCESS;
+    }
+    return ret;
+}

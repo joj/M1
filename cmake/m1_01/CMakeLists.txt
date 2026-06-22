@@ -389,6 +389,8 @@ target_sources(m1_01 INTERFACE
     ../../m1_csrc/m1_virtual_kb.c
     ../../m1_csrc/m1_watchdog.c
     ../../m1_csrc/m1_wifi.c
+    ../../m1_csrc/m1_wifi_attack.c
+    ../../m1_csrc/m1_wifi_attack_ui.c
     ../../m1_csrc/privateprofilestring.c
     ../../m1_csrc/uiView.c
 )

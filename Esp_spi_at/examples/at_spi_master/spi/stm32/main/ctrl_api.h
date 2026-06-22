@@ -203,11 +203,14 @@ typedef enum _CtrlMsgId {
   CTRL_MSG_ID__Resp_BLEGattPrimSrv = 231,
   CTRL_MSG_ID__Resp_BLEGattChar = 232,
   CTRL_MSG_ID__Resp_BLEGattRead = 233,
+  CTRL_MSG_ID__Resp_WifiSetStationMode = 234,   /* phase 3: dictionary attack */
+  CTRL_MSG_ID__Resp_WifiTryConnect = 235,
+  CTRL_MSG_ID__Resp_WifiDisconnectAP = 236,
   /*
    * Add new control path command response before Resp_Max
    * and update Resp_Max
    */
-  CTRL_MSG_ID__Resp_Max = 234,
+  CTRL_MSG_ID__Resp_Max = 237,
   /*
    ** Event Msgs *
    */
@@ -340,6 +343,9 @@ typedef enum {
 	CTRL_RESP_BLE_GATT_PRIMSRV			= CTRL_MSG_ID__Resp_BLEGattPrimSrv,
 	CTRL_RESP_BLE_GATT_CHAR				= CTRL_MSG_ID__Resp_BLEGattChar,
 	CTRL_RESP_BLE_GATT_READ				= CTRL_MSG_ID__Resp_BLEGattRead,
+	CTRL_RESP_WIFI_SET_STATION_MODE		= CTRL_MSG_ID__Resp_WifiSetStationMode,  /* phase 3 */
+	CTRL_RESP_WIFI_TRY_CONNECT			= CTRL_MSG_ID__Resp_WifiTryConnect,
+	CTRL_RESP_WIFI_DISCONNECT_AP		= CTRL_MSG_ID__Resp_WifiDisconnectAP,
 	/*
 	 * Add new control path comm       and response before Resp_Max
 	 * and update Resp_Max
@@ -566,6 +572,19 @@ typedef struct {
 	char value_hex[BLE_GATT_VALUE_HEX_LEN];
 } ble_gatt_read_t;
 
+/* ---- WiFi dictionary attack (phase 3) ----
+ * AT+CWJAP error codes per Espressif AT command set:
+ *   1 = connection timeout
+ *   2 = wrong password
+ *   3 = cannot find target AP
+ *   4 = connection failed
+ *   anything else (incl. raw "FAIL") -> M1_WIFI_TRY_OTHER
+ */
+typedef struct {
+	int try_status;     /* M1_WIFI_TRY_* (defined in m1_wifi_attack.h) */
+	int at_err_code;    /* raw +CWJAP:<n>, 0 if not seen */
+} wifi_try_result_t;
+
 typedef struct {
 	int count;
 	/* dynamic list*/
@@ -671,6 +690,7 @@ typedef struct Ctrl_cmd_t {
 		ble_gatt_srv_list_t         ble_srv_list;
 		ble_gatt_char_list_t        ble_char_list;
 		ble_gatt_read_t             ble_read;
+		wifi_try_result_t           wifi_try;        /* phase 3 */
 	}u;
 	/* Wait for timeout duration, if response not received,
 	 * it will send timeout response.
