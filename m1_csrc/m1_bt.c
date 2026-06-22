@@ -30,6 +30,8 @@
 #include "spi_master.h"
 #include "esp_app_main.h"
 #include "esp_at_list.h"
+#include "m1_oui_lookup.h"
+#include "m1_ble_fingerprint.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -484,13 +486,29 @@ static uint16_t ble_scan_list_print(ctrl_cmd_t *app_resp, bool up_dir)
 
 	y_offset = 14 + M1_GUI_FONT_HEIGHT - 1;
 	// Draw text
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, list[i].bssid);
+	u8g2_DrawStr(&m1_u8g2, 2, y_offset, (const char *)list[i].bssid);
 	y_offset += M1_GUI_FONT_HEIGHT + M1_GUI_ROW_SPACING;
-	sprintf(prn_msg, "RSSI: %ddBm", list[i].rssi);
+	sprintf(prn_msg, "RSSI:%ddBm Typ:%d", list[i].rssi, list[i].encryption_mode);
 	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
 	y_offset += M1_GUI_FONT_HEIGHT;
-	sprintf(prn_msg, "Address type: %d", list[i].encryption_mode);
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
+	{
+		const int max_chars = (M1_LCD_DISPLAY_WIDTH / M1_GUI_FONT_WIDTH) - 1;
+		char vendor[M1_OUI_VENDOR_LEN + 1];
+		// Random/RPA addresses (addr_type != 0) carry meaningless OUI.
+		if (list[i].encryption_mode == 0)
+			m1_oui_lookup_str((const char *)list[i].bssid, vendor, sizeof(vendor));
+		else
+			snprintf(vendor, sizeof(vendor), "(random addr)");
+		if ((int)strlen(vendor) > max_chars) vendor[max_chars] = '\0';
+		u8g2_DrawStr(&m1_u8g2, 2, y_offset, vendor);
+		y_offset += M1_GUI_FONT_HEIGHT;
+
+		char fp[40];
+		m1_ble_describe(list[i].adv_data, list[i].scan_rsp_data,
+		                list[i].encryption_mode, fp, sizeof(fp));
+		if ((int)strlen(fp) > max_chars) fp[max_chars] = '\0';
+		u8g2_DrawStr(&m1_u8g2, 2, y_offset, fp);
+	}
 
 	m1_u8g2_nextpage(); // Update display RAM
 

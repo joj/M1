@@ -441,12 +441,21 @@ typedef struct {
 
 } vendor_ie_data_t;
 
+/* Max BLE adv payload is 31 bytes => 62 hex chars + null.
+ * scan-response is also up to 31 bytes. These are populated for BLE scan
+ * results (CTRL_RESP_GET_BLE_SCAN_LIST) only; for wifi APs they are empty
+ * strings.
+ */
+#define BLE_ADV_HEX_SIZE   63
+
 typedef struct {
 	uint8_t ssid[SSID_LENGTH];
 	uint8_t bssid[BSSID_STR_SIZE];
 	int rssi;
 	int channel;
-	int encryption_mode;
+	int encryption_mode; /* For BLE scan, this holds the BLE address type. */
+	char adv_data[BLE_ADV_HEX_SIZE];      /* BLE only: adv data as hex string */
+	char scan_rsp_data[BLE_ADV_HEX_SIZE]; /* BLE only: scan-rsp as hex string */
 } wifi_scanlist_t;
 
 typedef struct {

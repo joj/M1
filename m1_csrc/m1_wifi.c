@@ -23,6 +23,7 @@
 //#include "control.h"
 #include "ctrl_api.h"
 #include "esp_app_main.h"
+#include "m1_oui_lookup.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -283,18 +284,26 @@ static uint16_t wifi_ap_list_print(ctrl_cmd_t *app_resp, bool up_dir)
 	if ( list[i].ssid[0]==0x00 ) // Hidden SSID?
 		strcpy(prn_msg, "*hidden*");
 	else
-		strncpy(prn_msg, list[i].ssid, M1_LCD_DISPLAY_WIDTH/M1_GUI_FONT_WIDTH);
+		strncpy(prn_msg, (const char *)list[i].ssid, M1_LCD_DISPLAY_WIDTH/M1_GUI_FONT_WIDTH);
 	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
 	y_offset += M1_GUI_FONT_HEIGHT;
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, list[i].bssid);
+	u8g2_DrawStr(&m1_u8g2, 2, y_offset, (const char *)list[i].bssid);
 	y_offset += M1_GUI_FONT_HEIGHT + M1_GUI_ROW_SPACING;
+	// Vendor (OUI lookup); truncated to fit the screen.
+	{
+		char vendor[M1_OUI_VENDOR_LEN + 1];
+		m1_oui_lookup_str((const char *)list[i].bssid, vendor, sizeof(vendor));
+		int max_chars = (M1_LCD_DISPLAY_WIDTH / M1_GUI_FONT_WIDTH) - 1;
+		if ((int)strlen(vendor) > max_chars)
+			vendor[max_chars] = '\0';
+		u8g2_DrawStr(&m1_u8g2, 2, y_offset, vendor);
+	}
+	y_offset += M1_GUI_FONT_HEIGHT;
 	sprintf(prn_msg, "RSSI: %ddBm", list[i].rssi);
 	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
 	y_offset += M1_GUI_FONT_HEIGHT;
-	sprintf(prn_msg, "Channel: %d", list[i].channel);
-	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
-	y_offset += M1_GUI_FONT_HEIGHT;
-	sprintf(prn_msg, "Auth mode: %d", list[i].encryption_mode);
+	// Merge channel + auth on a single line to free a row for vendor.
+	sprintf(prn_msg, "Ch:%d Auth:%d", list[i].channel, list[i].encryption_mode);
 	u8g2_DrawStr(&m1_u8g2, 2, y_offset, prn_msg);
 
 	m1_u8g2_nextpage(); // Update display RAM

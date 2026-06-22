@@ -30,6 +30,7 @@ See [HARDWARE.md](HARDWARE.md) for more details.
 - [Build Tool (mbt)](documentation/mbt.md) – Build with STM32CubeIDE or VS Code
 - [Architecture](ARCHITECTURE.md) – Project structure
 - [Development](DEVELOPMENT.md) – Development guidelines
+- [OUI/BLE Device Identification](documentation/oui_database.md) – MAC vendor lookup and BLE fingerprinting on scan views
 
 ## Building
 

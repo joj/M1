@@ -132,6 +132,7 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 
 			case CTRL_RESP_GET_BLE_SCAN_LIST:
 				//+BLESCAN:"7c:0a:3f:9b:d5:cd",-81,1bff750042040180667c0a3f9bd5cd7e0a3f9bd5cc01000000000000,,0,3
+				// Fields after RSSI: <adv_data_hex>,<scan_rsp_data_hex>,<addr_type>,<adv_type>
 				ap_count = app_resp->u.wifi_ap_scan.count;
 				out_list = app_resp->u.wifi_ap_scan.out_list;
 				while ( true )
@@ -146,14 +147,63 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 					out_list = realloc(out_list, sizeof(wifi_scanlist_t)*(app_resp->u.wifi_ap_scan.count + 1));
 					if ( out_list==NULL )
 						break;
+					wifi_scanlist_t *e = &out_list[app_resp->u.wifi_ap_scan.count];
+					/* Zero adv/scan-rsp fields up front so missing values stay empty. */
+					e->adv_data[0] = '\0';
+					e->scan_rsp_data[0] = '\0';
+
+					/* bssid */
 					end_index = strstr(&start_index[1], "\"");
 					cp_len = end_index - start_index - 1;
-					strncpy(out_list[app_resp->u.wifi_ap_scan.count].bssid, &start_index[1], cp_len);
-					out_list[app_resp->u.wifi_ap_scan.count].bssid[cp_len] = 0x00; // Add end of string
-					out_list[app_resp->u.wifi_ap_scan.count].rssi = strtol(&end_index[2], &start_index, 10);
-					end_index = strstr(&start_index[1], ",");
-					end_index = strstr(&end_index[1], ",");
-					out_list[app_resp->u.wifi_ap_scan.count].encryption_mode = strtol(&end_index[1], &start_index, 10);
+					strncpy((char *)e->bssid, &start_index[1], cp_len);
+					e->bssid[cp_len] = 0x00;
+
+					/* rssi */
+					e->rssi = strtol(&end_index[2], &start_index, 10);
+
+					/* adv_data hex (field 3) — between comma after rssi and next comma */
+					if ( *start_index == ',' )
+					{
+						const char *adv_start = start_index + 1;
+						const char *adv_end = strchr(adv_start, ',');
+						if ( adv_end && (adv_end < next_index) )
+						{
+							cp_len = (size_t)(adv_end - adv_start);
+							if ( cp_len >= sizeof(e->adv_data) )
+								cp_len = sizeof(e->adv_data) - 1;
+							memcpy(e->adv_data, adv_start, cp_len);
+							e->adv_data[cp_len] = '\0';
+
+							/* scan_rsp_data hex (field 4) */
+							const char *sr_start = adv_end + 1;
+							const char *sr_end = strchr(sr_start, ',');
+							if ( sr_end && (sr_end < next_index) )
+							{
+								cp_len = (size_t)(sr_end - sr_start);
+								if ( cp_len >= sizeof(e->scan_rsp_data) )
+									cp_len = sizeof(e->scan_rsp_data) - 1;
+								memcpy(e->scan_rsp_data, sr_start, cp_len);
+								e->scan_rsp_data[cp_len] = '\0';
+
+								/* addr_type (field 5) */
+								e->encryption_mode = strtol(sr_end + 1, &start_index, 10);
+							}
+							else
+							{
+								e->encryption_mode = 0;
+								start_index = (char *)next_index;
+							}
+						}
+						else
+						{
+							e->encryption_mode = 0;
+							start_index = (char *)next_index;
+						}
+					}
+					else
+					{
+						e->encryption_mode = 0;
+					}
 
 					app_resp->u.wifi_ap_scan.count++; // Increase count
 					index = strstr(next_index, resp_key); // Try to get another record
