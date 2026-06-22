@@ -99,11 +99,15 @@ scripts\flash_to_sd.bat E:
 (replace `E:` with whatever drive letter your SD card mounted as). It will:
 
 1. Verify `artifacts/MonstaTek_M1_v0800_wCRC.bin` exists (built by `make`).
-2. Build `oui.bin` via `scripts/build_oui_db.py` if you don't already have
-   one (needs Python and network access).
-3. Copy the firmware to the SD root and `oui.bin` to `<SD>\databases\`.
+2. Build `oui.bin` via `scripts/build_oui_db.py` if missing.
+3. Build `wifi_wordlist.txt` via `scripts/build_wifi_wordlist.py` if missing.
+4. Copy the firmware to the SD root, `oui.bin` and `wifi_wordlist.txt` to
+   `<SD>\databases\`.
 
-Pass `--no-oui` to skip the database step (firmware only).
+Flags (any order, before or after the drive letter):
+
+- `--no-oui` — skip the OUI database step.
+- `--no-wordlist` — skip the WiFi wordlist step.
 
 Then on the M1: **Menu → Firmware Update →
 MonstaTek_M1_v0800_wCRC.bin**.

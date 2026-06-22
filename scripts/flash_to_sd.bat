@@ -1,21 +1,25 @@
 @echo off
 REM See COPYING.txt for license details.
 REM
-REM flash_to_sd.bat — Stage a new firmware build and the OUI database onto the
-REM M1 SD card for the on-device updater.
+REM flash_to_sd.bat — Stage a new firmware build, the OUI database, and the
+REM WiFi WPA dictionary wordlist onto the M1 SD card.
 REM
 REM Usage (run from the repo root, after `make` has produced artifacts/):
 REM
-REM     scripts\flash_to_sd.bat E:           rem stage to drive E:
-REM     scripts\flash_to_sd.bat E: --no-oui  rem firmware only, skip OUI DB
-REM     scripts\flash_to_sd.bat              rem prompts for drive letter
+REM     scripts\flash_to_sd.bat E:                  rem stage everything
+REM     scripts\flash_to_sd.bat E: --no-oui         rem skip OUI DB
+REM     scripts\flash_to_sd.bat E: --no-wordlist    rem skip wifi wordlist
+REM     scripts\flash_to_sd.bat                     rem prompts for drive letter
+REM
+REM Multiple --no-* flags may be combined in any order.
 REM
 REM What it does:
 REM   1. Verifies artifacts\MonstaTek_M1_v0800_wCRC.bin exists.
-REM   2. (Optional) Builds oui.bin in the repo root if missing, via the
-REM      Python tool scripts\build_oui_db.py — needs network.
-REM   3. Copies the firmware to <DRIVE>\ and oui.bin to <DRIVE>\databases\.
-REM   4. Lists what's now on the card so you can sanity-check.
+REM   2. (Optional) Builds oui.bin in the repo root if missing.
+REM   3. (Optional) Builds wifi_wordlist.txt in the repo root if missing.
+REM   4. Copies the firmware to <DRIVE>\, oui.bin to <DRIVE>\databases\,
+REM      and wifi_wordlist.txt to <DRIVE>\databases\.
+REM   5. Lists what's now on the card.
 REM
 REM On the M1:  Menu -> Firmware Update -> select MonstaTek_M1_v0800_wCRC.bin
 
@@ -25,15 +29,21 @@ set "SCRIPT_DIR=%~dp0"
 set "REPO_ROOT=%SCRIPT_DIR%.."
 set "FW_SRC=%REPO_ROOT%\artifacts\MonstaTek_M1_v0800_wCRC.bin"
 set "OUI_SRC=%REPO_ROOT%\oui.bin"
+set "WORDLIST_SRC=%REPO_ROOT%\wifi_wordlist.txt"
 set "SKIP_OUI=0"
+set "SKIP_WORDLIST=0"
+set "DRIVE="
 
-REM --- Parse arguments ---
-set "DRIVE=%~1"
-if /I "%~2"=="--no-oui" set "SKIP_OUI=1"
-if /I "%~1"=="--no-oui" (
-    set "SKIP_OUI=1"
-    set "DRIVE=%~2"
-)
+REM --- Parse arguments in any order ---
+:argloop
+if "%~1"=="" goto args_done
+if /I "%~1"=="--no-oui"      ( set "SKIP_OUI=1"      & shift & goto argloop )
+if /I "%~1"=="--no-wordlist" ( set "SKIP_WORDLIST=1" & shift & goto argloop )
+if "%DRIVE%"=="" ( set "DRIVE=%~1" & shift & goto argloop )
+echo WARN: unrecognised argument "%~1"
+shift
+goto argloop
+:args_done
 
 if "%DRIVE%"=="" (
     set /p "DRIVE=Enter SD card drive letter (e.g. E:): "
@@ -59,12 +69,16 @@ if not exist "%FW_SRC%" (
     exit /b 1
 )
 
+REM --- Locate python once for any host-side build steps ---
+set "PYTHON_AVAILABLE=0"
+where python >nul 2>&1
+if not errorlevel 1 set "PYTHON_AVAILABLE=1"
+
 REM --- Optionally build the OUI DB if missing ---
 if "%SKIP_OUI%"=="0" (
     if not exist "%OUI_SRC%" (
         echo oui.bin not found; building via scripts\build_oui_db.py ...
-        where python >nul 2>&1
-        if errorlevel 1 (
+        if "!PYTHON_AVAILABLE!"=="0" (
             echo ERROR: python is not on PATH. Install Python 3 or pass --no-oui.
             exit /b 1
         )
@@ -74,6 +88,25 @@ if "%SKIP_OUI%"=="0" (
         popd >nul
         if not "!PY_RC!"=="0" (
             echo ERROR: build_oui_db.py failed ^(rc=!PY_RC!^).
+            exit /b 1
+        )
+    )
+)
+
+REM --- Optionally build the WiFi wordlist if missing ---
+if "%SKIP_WORDLIST%"=="0" (
+    if not exist "%WORDLIST_SRC%" (
+        echo wifi_wordlist.txt not found; building via scripts\build_wifi_wordlist.py ...
+        if "!PYTHON_AVAILABLE!"=="0" (
+            echo ERROR: python is not on PATH. Install Python 3 or pass --no-wordlist.
+            exit /b 1
+        )
+        pushd "%REPO_ROOT%" >nul
+        python "%SCRIPT_DIR%build_wifi_wordlist.py" --out wifi_wordlist.txt
+        set "PY_RC=!errorlevel!"
+        popd >nul
+        if not "!PY_RC!"=="0" (
+            echo ERROR: build_wifi_wordlist.py failed ^(rc=!PY_RC!^).
             exit /b 1
         )
     )
@@ -89,11 +122,12 @@ if errorlevel 1 (
 )
 echo   firmware:  %DRIVE%\MonstaTek_M1_v0800_wCRC.bin
 
+REM --- Ensure the databases directory exists if we're staging anything into it ---
+if "%SKIP_OUI%"=="0"      ( if not exist "%DRIVE%\databases\" mkdir "%DRIVE%\databases" 2>nul )
+if "%SKIP_WORDLIST%"=="0" ( if not exist "%DRIVE%\databases\" mkdir "%DRIVE%\databases" 2>nul )
+
 REM --- Stage the OUI DB ---
 if "%SKIP_OUI%"=="0" (
-    if not exist "%DRIVE%\databases\" (
-        mkdir "%DRIVE%\databases" 2>nul
-    )
     copy /Y "%OUI_SRC%" "%DRIVE%\databases\oui.bin" >nul
     if errorlevel 1 (
         echo ERROR: failed to copy oui.bin to %DRIVE%\databases\.
@@ -104,11 +138,24 @@ if "%SKIP_OUI%"=="0" (
     echo   OUI DB:    skipped ^(--no-oui^)
 )
 
+REM --- Stage the WiFi wordlist ---
+if "%SKIP_WORDLIST%"=="0" (
+    copy /Y "%WORDLIST_SRC%" "%DRIVE%\databases\wifi_wordlist.txt" >nul
+    if errorlevel 1 (
+        echo ERROR: failed to copy wifi_wordlist.txt to %DRIVE%\databases\.
+        exit /b 1
+    )
+    echo   wordlist:  %DRIVE%\databases\wifi_wordlist.txt
+) else (
+    echo   wordlist:  skipped ^(--no-wordlist^)
+)
+
 REM --- Show what we wrote ---
 echo.
 echo === Contents on %DRIVE% ===
 dir /B "%DRIVE%\MonstaTek_M1_v0800_wCRC.bin" 2>nul
-if "%SKIP_OUI%"=="0" dir /B "%DRIVE%\databases\oui.bin" 2>nul
+if "%SKIP_OUI%"=="0"      dir /B "%DRIVE%\databases\oui.bin" 2>nul
+if "%SKIP_WORDLIST%"=="0" dir /B "%DRIVE%\databases\wifi_wordlist.txt" 2>nul
 
 echo.
 echo Done. Eject the SD card and pop it into the M1.
