@@ -25,6 +25,9 @@
 #include "esp_app_main.h"
 #include "m1_oui_lookup.h"
 #include "m1_wifi_attack_ui.h"
+#include "m1_wifi_capture_ui.h"
+#include "m1_display.h"
+#include "m1_system.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -65,6 +68,44 @@ bool wifi_scan_get_selected_ssid_bssid(char *ssid_out, size_t ssid_out_size,
 		snprintf(bssid_out, bssid_out_size, "%s",
 		         (const char *)g_wifi_scan_selected->bssid);
 	return true;
+}
+
+/* Returns the wifi channel of the currently-displayed AP (0 if none). */
+int wifi_scan_get_selected_channel(void)
+{
+	return g_wifi_scan_selected ? g_wifi_scan_selected->channel : 0;
+}
+
+/* Tiny 2-option chooser: returns 0 (Dict), 1 (Capture), or -1 (BACK). */
+static int wifi_long_press_menu(const char *ssid)
+{
+	int sel = 0;
+	while (true)
+	{
+		m1_u8g2_firstpage();
+		u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
+		u8g2_DrawStr(&m1_u8g2, 2, M1_GUI_FONT_HEIGHT, "Target:");
+		char buf[24];
+		snprintf(buf, sizeof(buf), "%.20s", ssid ? ssid : "?");
+		u8g2_DrawStr(&m1_u8g2, 2, 14 + M1_GUI_FONT_HEIGHT, buf);
+		u8g2_DrawStr(&m1_u8g2, 2, 14 + 3*M1_GUI_FONT_HEIGHT,
+		             sel == 0 ? ">Dict attack"  : " Dict attack");
+		u8g2_DrawStr(&m1_u8g2, 2, 14 + 4*M1_GUI_FONT_HEIGHT,
+		             sel == 1 ? ">Capture hand" : " Capture hand");
+		u8g2_DrawStr(&m1_u8g2, 2, 14 + 5*M1_GUI_FONT_HEIGHT, "OK=go BACK=quit");
+		m1_u8g2_nextpage();
+
+		S_M1_Main_Q_t q;
+		if (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) != pdTRUE) continue;
+		if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
+		S_M1_Buttons_Status b;
+		if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
+		if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) return -1;
+		if (b.event[BUTTON_UP_KP_ID]   == BUTTON_EVENT_CLICK) sel = (sel + 1) & 1;
+		if (b.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK) sel = (sel + 1) & 1;
+		if (b.event[BUTTON_OK_KP_ID]   == BUTTON_EVENT_CLICK ||
+		    b.event[BUTTON_OK_KP_ID]   == BUTTON_EVENT_LCLICK) return sel;
+	}
 }
 
 /*************** F U N C T I O N   I M P L E M E N T A T I O N ****************/
@@ -204,7 +245,7 @@ void wifi_scan_ap(void)
 				{
 					; // Do other things for this task, if needed
 				}
-				else if ( this_button_status.event[BUTTON_OK_KP_ID]==BUTTON_EVENT_LCLICK ) // Long-press OK: dictionary attack
+				else if ( this_button_status.event[BUTTON_OK_KP_ID]==BUTTON_EVENT_LCLICK ) // Long-press OK: chooser
 				{
 					char sel_ssid[SSID_LENGTH];
 					char sel_bssid[BSSID_STR_SIZE];
@@ -212,7 +253,12 @@ void wifi_scan_ap(void)
 					    wifi_scan_get_selected_ssid_bssid(sel_ssid, sizeof(sel_ssid),
 					                                     sel_bssid, sizeof(sel_bssid)))
 					{
-						m1_wifi_attack_ui_run(sel_ssid, sel_bssid);
+						int choice = wifi_long_press_menu(sel_ssid);
+						int chan = wifi_scan_get_selected_channel();
+						if (choice == 0)
+							m1_wifi_attack_ui_run(sel_ssid, sel_bssid);
+						else if (choice == 1)
+							m1_wifi_capture_ui_run(sel_ssid, sel_bssid, chan);
 						/* Redraw current AP on return. */
 						if (list_count)
 							wifi_ap_list_print(&app_req, true);

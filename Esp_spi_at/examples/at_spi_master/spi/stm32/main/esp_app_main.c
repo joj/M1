@@ -24,6 +24,7 @@
 #include "m1_compile_cfg.h"
 #include "m1_esp32_hal.h"
 #include "esp_at_list.h"
+#include "esp_app_main.h"
 #include "esp_queue.h"
 #include "m1_at_response_parser.h"
 
@@ -1228,4 +1229,199 @@ uint8_t wifi_try_connect(ctrl_cmd_t *app_req,
         app_req->resp_event_status = SUCCESS;
     }
     return ret;
+}
+
+
+
+/* ============================================================================
+ * Phase 3c — passive WiFi capture (custom AT commands AT+WIFISCAN/STOP/PMKID
+ * implemented by the M1 ESP-AT user component).
+ *
+ * Async lines arrive in the same SPI receive path as everything else; the
+ * pump simply pulls one queue entry per call and parses it for any of
+ * the +WIFI* prefixes. If multiple +WIFI* lines are concatenated in a
+ * single SPI payload, only the first is consumed per pump call (the
+ * caller re-pumps until it sees M1_WIFI_EVT_NONE).
+ * ============================================================================ */
+
+static int hex2nibble(int c)
+{
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    return -1;
+}
+
+static int parse_mac_hex12(const char *s, uint8_t out[6])
+{
+    for (int i = 0; i < 6; i++)
+    {
+        int hi = hex2nibble(s[2*i]);
+        int lo = hex2nibble(s[2*i + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[i] = (uint8_t)((hi << 4) | lo);
+    }
+    return 0;
+}
+
+static int hex_to_bytes(const char *hex, size_t hex_len,
+                        uint8_t *out, size_t out_max,
+                        size_t *out_n)
+{
+    size_t n = 0;
+    if (hex_len & 1) return -1;
+    for (size_t i = 0; i + 1 < hex_len && n < out_max; i += 2)
+    {
+        int hi = hex2nibble(hex[i]);
+        int lo = hex2nibble(hex[i + 1]);
+        if (hi < 0 || lo < 0) return -1;
+        out[n++] = (uint8_t)((hi << 4) | lo);
+    }
+    if (out_n) *out_n = n;
+    return 0;
+}
+
+static uint8_t parse_one_event(const char *line, m1_wifi_evt_t *out)
+{
+    if (!line || !out) return M1_WIFI_EVT_NONE;
+    memset(out, 0, sizeof(*out));
+
+    const char *p;
+    if ((p = strstr(line, ESP32C6_AT_RES_WIFIBEACON_KEY)) != NULL)
+    {
+        p += strlen(ESP32C6_AT_RES_WIFIBEACON_KEY);
+        if (parse_mac_hex12(p, out->bssid) != 0) return M1_WIFI_EVT_NONE;
+        p += 12;
+        if (*p != ',') return M1_WIFI_EVT_NONE; p++;
+        char *end;
+        out->channel = (uint8_t)strtol(p, &end, 10);
+        if (*end != ',') return M1_WIFI_EVT_NONE; p = end + 1;
+        const char *eol = strstr(p, "\r\n");
+        if (!eol) eol = p + strlen(p);
+        size_t hex_len = (size_t)(eol - p);
+        size_t ssid_n = 0;
+        uint8_t ssid_bytes[32];
+        if (hex_len <= 64
+            && hex_to_bytes(p, hex_len, ssid_bytes, sizeof(ssid_bytes),
+                            &ssid_n) == 0)
+        {
+            if (ssid_n >= sizeof(out->ssid)) ssid_n = sizeof(out->ssid) - 1;
+            memcpy(out->ssid, ssid_bytes, ssid_n);
+            out->ssid[ssid_n] = '\0';
+        }
+        out->kind = M1_WIFI_EVT_BEACON;
+        return M1_WIFI_EVT_BEACON;
+    }
+
+    if ((p = strstr(line, ESP32C6_AT_RES_WIFIEAPOL_KEY)) != NULL)
+    {
+        p += strlen(ESP32C6_AT_RES_WIFIEAPOL_KEY);
+        if (parse_mac_hex12(p, out->bssid) != 0) return M1_WIFI_EVT_NONE;
+        p += 12; if (*p++ != ',') return M1_WIFI_EVT_NONE;
+        if (parse_mac_hex12(p, out->sta)   != 0) return M1_WIFI_EVT_NONE;
+        p += 12; if (*p++ != ',') return M1_WIFI_EVT_NONE;
+        char *end;
+        out->msg_num = (uint8_t)strtol(p, &end, 10);
+        if (*end != ',') return M1_WIFI_EVT_NONE; p = end + 1;
+        const char *eol = strstr(p, "\r\n");
+        if (!eol) eol = p + strlen(p);
+        size_t hex_len = (size_t)(eol - p);
+        size_t n = 0;
+        if (hex_to_bytes(p, hex_len, out->payload, sizeof(out->payload),
+                         &n) != 0) return M1_WIFI_EVT_NONE;
+        out->payload_len = (uint16_t)n;
+        out->kind = M1_WIFI_EVT_EAPOL;
+        return M1_WIFI_EVT_EAPOL;
+    }
+
+    if ((p = strstr(line, ESP32C6_AT_RES_WIFIPMKID_KEY)) != NULL)
+    {
+        p += strlen(ESP32C6_AT_RES_WIFIPMKID_KEY);
+        if (parse_mac_hex12(p, out->bssid) != 0) return M1_WIFI_EVT_NONE;
+        p += 12; if (*p++ != ',') return M1_WIFI_EVT_NONE;
+        if (parse_mac_hex12(p, out->sta)   != 0) return M1_WIFI_EVT_NONE;
+        p += 12; if (*p++ != ',') return M1_WIFI_EVT_NONE;
+        const char *eol = strstr(p, "\r\n");
+        if (!eol) eol = p + strlen(p);
+        size_t hex_len = (size_t)(eol - p);
+        size_t n = 0;
+        if (hex_to_bytes(p, hex_len, out->payload, sizeof(out->payload),
+                         &n) != 0) return M1_WIFI_EVT_NONE;
+        if (n != 16) return M1_WIFI_EVT_NONE;
+        out->payload_len = 16;
+        out->kind = M1_WIFI_EVT_PMKID;
+        return M1_WIFI_EVT_PMKID;
+    }
+
+    if ((p = strstr(line, ESP32C6_AT_RES_WIFIDEAUTH_KEY)) != NULL)
+    {
+        p += strlen(ESP32C6_AT_RES_WIFIDEAUTH_KEY);
+        if (parse_mac_hex12(p, out->bssid) != 0) return M1_WIFI_EVT_NONE;
+        p += 12; if (*p++ != ',') return M1_WIFI_EVT_NONE;
+        if (parse_mac_hex12(p, out->sta)   != 0) return M1_WIFI_EVT_NONE;
+        p += 12; if (*p++ != ',') return M1_WIFI_EVT_NONE;
+        char *end;
+        out->reason = (uint8_t)strtol(p, &end, 10);
+        out->kind = M1_WIFI_EVT_DEAUTH;
+        return M1_WIFI_EVT_DEAUTH;
+    }
+
+    return M1_WIFI_EVT_NONE;
+}
+
+uint8_t wifi_monitor_start(int channel)
+{
+    if (channel < 0 || channel > 14) return ERROR;
+    char buf[40];
+    int n = snprintf(buf, sizeof(buf), "%s%d%s",
+                     ESP32C6_AT_REQ_WIFISCAN, channel, ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(buf)) return ERROR;
+    ctrl_cmd_t app = CTRL_CMD_DEFAULT_REQ();
+    app.cmd_timeout_sec = 5;
+    app.at_cmd = strdup(buf);
+    app.msg_id = 0;
+    return at_send_and_collect(&app, NULL, ESP32C6_AT_RES_OK);
+}
+
+uint8_t wifi_monitor_stop(void)
+{
+    ctrl_cmd_t app = CTRL_CMD_DEFAULT_REQ();
+    app.cmd_timeout_sec = 5;
+    app.at_cmd = strdup(CONCAT_CMD_PARAM(ESP32C6_AT_REQ_WIFISTOP, ""));
+    app.msg_id = 0;
+    return at_send_and_collect(&app, NULL, ESP32C6_AT_RES_OK);
+}
+
+uint8_t wifi_pmkid_probe(const char *bssid, int channel)
+{
+    if (!bssid) return ERROR;
+    char buf[64];
+    int n = snprintf(buf, sizeof(buf), "%s\"%s\",%d%s",
+                     ESP32C6_AT_REQ_WIFIPMKID, bssid, channel,
+                     ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(buf)) return ERROR;
+    ctrl_cmd_t app = CTRL_CMD_DEFAULT_REQ();
+    app.cmd_timeout_sec = 5;
+    app.at_cmd = strdup(buf);
+    app.msg_id = 0;
+    return at_send_and_collect(&app, NULL, ESP32C6_AT_RES_OK);
+}
+
+uint8_t wifi_capture_pump(m1_wifi_evt_t *out_evt, int max_wait_ms)
+{
+    if (!out_evt) return M1_WIFI_EVT_NONE;
+    out_evt->kind = M1_WIFI_EVT_NONE;
+    int read_len = 0;
+    uint32_t rx_uid = 0;
+    /* Convert ms timeout to the seconds the SPI helper expects, clamped. */
+    int to_sec = max_wait_ms > 0 ? (max_wait_ms + 999) / 1000 : 1;
+    char *buf = (char *)spi_AT_app_get_response(&read_len, &rx_uid, to_sec);
+    if (!buf || read_len <= 0)
+    {
+        if (buf) free(buf);
+        return M1_WIFI_EVT_NONE;
+    }
+    uint8_t k = parse_one_event(buf, out_evt);
+    free(buf);
+    return k;
 }

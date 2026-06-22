@@ -75,4 +75,23 @@
 #define ESP32C6_AT_RES_CWJAP_FAIL_KEY "+CWJAP:"
 #define ESP32C6_AT_RES_FAIL           "FAIL"
 
+/* Phase 3c — passive WiFi capture (custom ESP-AT user commands).
+ *   AT+WIFISCAN=<chan>            -> start promiscuous monitor (0 = hop)
+ *   AT+WIFISTOP                   -> stop
+ *   AT+WIFIPMKID="<bssid>",<chan> -> pin channel for one BSSID
+ *
+ * Async event lines:
+ *   +WIFIBEACON:<bssid>,<chan>,<ssid_hex>
+ *   +WIFIEAPOL:<bssid>,<sta>,<msg_num>,<frame_hex>
+ *   +WIFIPMKID:<bssid>,<sta>,<pmkid_hex>
+ *   +WIFIDEAUTH:<bssid>,<sta>,<reason>
+ */
+#define ESP32C6_AT_REQ_WIFISCAN       "AT+WIFISCAN="
+#define ESP32C6_AT_REQ_WIFISTOP       "AT+WIFISTOP"
+#define ESP32C6_AT_REQ_WIFIPMKID      "AT+WIFIPMKID="
+#define ESP32C6_AT_RES_WIFIBEACON_KEY "+WIFIBEACON:"
+#define ESP32C6_AT_RES_WIFIEAPOL_KEY  "+WIFIEAPOL:"
+#define ESP32C6_AT_RES_WIFIPMKID_KEY  "+WIFIPMKID:"
+#define ESP32C6_AT_RES_WIFIDEAUTH_KEY "+WIFIDEAUTH:"
+
 #endif /* ESP32C6_AT_LIST_H_ */
