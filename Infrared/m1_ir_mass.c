@@ -185,6 +185,25 @@ static void mass_off_run(uint8_t remote_type)
     }
 
     uint32_t total = ir_remote_dev_func_counter_get(FN_POWER);
+
+    /* ir_remote_file_data_check() walked the whole file to populate the
+     * counter, leaving the file pointer at EOF. Close + reopen so the
+     * subsequent function_data_read calls actually find entries. */
+    ir_remote_file_deinit();
+    if (ir_remote_file_header_check(db_file_for(remote_type), remote_type))
+    {
+        draw_screen(header, 0, total, "Reopen failed");
+        S_M1_Main_Q_t q;
+        S_M1_Buttons_Status b;
+        while (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) == pdTRUE)
+        {
+            if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
+            if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
+            if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) break;
+        }
+        return;
+    }
+
     uint32_t fired = 0;
     bool aborted = false;
     bool done = false;
