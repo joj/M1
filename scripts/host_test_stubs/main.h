@@ -1,0 +1,1 @@
+/* Minimal host stub of main.h for the parser test. */

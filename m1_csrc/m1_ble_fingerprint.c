@@ -19,6 +19,7 @@
  */
 
 #include "m1_ble_fingerprint.h"
+#include "m1_ble_uuid_names.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -277,30 +278,10 @@ static bool decode_manuf(const uint8_t *payload, size_t payload_len,
     }
 }
 
-/* Well-known 16-bit Service UUIDs. */
+/* Well-known 16-bit Service UUIDs — delegate to the shared module. */
 static const char *known_service_uuid16(uint16_t u)
 {
-    switch (u)
-    {
-        case 0xFEAA: return "Eddystone";
-        case 0xFEED: return "Tile";
-        case 0xFE13: return "HomeKit";
-        case 0xFE9F: return "Google";
-        case 0xFD6F: return "Exposure Notification";
-        case 0xFD43: return "Apple FindMy";
-        case 0xFE17: return "Garmin";
-        case 0xFE2C: return "Google Cast";
-        case 0xFD5A: return "Nordic UART";
-        case 0xFEF3: return "Google Fast Pair";
-        case 0xFCD2: return "Allterco Shelly";
-        case 0xFFE0: return "HM-10/clone";
-        case 0x180F: return "Battery svc";
-        case 0x180A: return "Device Info";
-        case 0x180D: return "Heart Rate";
-        case 0x1812: return "HID";
-        case 0x1826: return "Fitness";
-        default:     return NULL;
-    }
+    return m1_ble_service_name(u);
 }
 
 bool m1_ble_describe(const char *adv_hex,

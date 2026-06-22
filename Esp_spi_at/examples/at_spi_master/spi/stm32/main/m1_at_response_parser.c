@@ -13,7 +13,9 @@
 /*************************** I N C L U D E S **********************************/
 
 #include <stdint.h>
+#include <stdbool.h>
 #include <string.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include "stm32h5xx_hal.h"
 #include "main.h"
@@ -83,6 +85,12 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 	uint16_t ap_count = 0xFFFF;
 	size_t cp_len;
 	wifi_scanlist_t *out_list;
+	/* Phase 2: GATT response parsing reads/writes different union members.
+	 * Track item counts before parsing so we can decide whether to return
+	 * SUCCESS for those msg_ids without disturbing the wifi-scan logic. */
+	int gatt_srv_count_before = 0;
+	int gatt_char_count_before = 0;
+	int gatt_added_or_updated = 0;
 	do
 	{
 		CHECK_NON_ZERO_VAL(resp);
@@ -214,14 +222,179 @@ uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_r
 
 			default:
 				break;
+
+			/* ---- Phase 2: BLE GATT client responses ---- */
+
+			case CTRL_RESP_BLE_CONNECT:
+				/* +BLECONN:<idx>,<status>   status 0 = success */
+				{
+					char *p = strchr(index, ',');
+					if (p)
+						app_resp->u.ble_conn.connect_status =
+							(int)strtol(p + 1, NULL, 10);
+					gatt_added_or_updated = 1;
+				}
+				break;
+
+			case CTRL_RESP_BLE_GATT_PRIMSRV:
+				/* +BLEGATTCPRIMSRV:<idx>,<srv_idx>,"<uuid>",<srv_type>
+				 * Multiple lines per response.
+				 */
+				gatt_srv_count_before = app_resp->u.ble_srv_list.count;
+				{
+					ble_gatt_srv_t *list = app_resp->u.ble_srv_list.out_list;
+					while (true)
+					{
+						char *line = strstr(index, resp_key);
+						if (!line) break;
+						char *eol = strstr(line, "\r\n");
+						if (!eol) eol = line + strlen(line);
+						/* skip past resp_key */
+						char *p = line + strlen(resp_key);
+						/* parse: idx,srv_idx,"uuid",srv_type */
+						(void)strtol(p, &p, 10);     /* conn_idx, ignored */
+						if (*p == ',') p++;
+						int srv_idx = (int)strtol(p, &p, 10);
+						if (*p == ',') p++;
+						char uuid[BLE_GATT_UUID_STR_LEN] = "";
+						if (*p == '"')
+						{
+							char *q = strchr(p + 1, '"');
+							if (q)
+							{
+								size_t n = (size_t)(q - p - 1);
+								if (n >= sizeof(uuid)) n = sizeof(uuid) - 1;
+								memcpy(uuid, p + 1, n);
+								uuid[n] = '\0';
+								p = q + 1;
+							}
+						}
+						if (*p == ',') p++;
+						int srv_type = (int)strtol(p, &p, 10);
+
+						list = realloc(list,
+							sizeof(ble_gatt_srv_t) * (app_resp->u.ble_srv_list.count + 1));
+						if (!list) break;
+						ble_gatt_srv_t *e = &list[app_resp->u.ble_srv_list.count];
+						e->srv_idx = srv_idx;
+						e->srv_type = srv_type;
+						snprintf(e->uuid, sizeof(e->uuid), "%s", uuid);
+						app_resp->u.ble_srv_list.count++;
+						/* advance past this line */
+						index = eol;
+					}
+					app_resp->u.ble_srv_list.out_list = list;
+					if (app_resp->u.ble_srv_list.count > gatt_srv_count_before)
+						gatt_added_or_updated = 1;
+				}
+				break;
+
+			case CTRL_RESP_BLE_GATT_CHAR:
+				/* +BLEGATTCCHAR:<idx>,"char",<srv_idx>,<char_idx>,"<uuid>",<props>
+				 * +BLEGATTCCHAR:<idx>,"desc",<srv_idx>,<char_idx>,<desc_idx>,"<uuid>"
+				 * Only "char" lines are captured.
+				 */
+				gatt_char_count_before = app_resp->u.ble_char_list.count;
+				{
+					ble_gatt_char_t *list = app_resp->u.ble_char_list.out_list;
+					while (true)
+					{
+						char *line = strstr(index, resp_key);
+						if (!line) break;
+						char *eol = strstr(line, "\r\n");
+						if (!eol) eol = line + strlen(line);
+						char *p = line + strlen(resp_key);
+						(void)strtol(p, &p, 10); /* conn_idx, ignored */
+						if (*p == ',') p++;
+						/* type "char" or "desc" */
+						bool is_char = false;
+						if (*p == '"')
+						{
+							char *q = strchr(p + 1, '"');
+							if (q)
+							{
+								is_char = (q == p + 5) && (memcmp(p + 1, "char", 4) == 0);
+								p = q + 1;
+							}
+						}
+						if (!is_char)
+						{
+							index = eol;
+							continue;
+						}
+						if (*p == ',') p++;
+						int srv_idx = (int)strtol(p, &p, 10);
+						if (*p == ',') p++;
+						int char_idx = (int)strtol(p, &p, 10);
+						if (*p == ',') p++;
+						char uuid[BLE_GATT_UUID_STR_LEN] = "";
+						if (*p == '"')
+						{
+							char *q = strchr(p + 1, '"');
+							if (q)
+							{
+								size_t n = (size_t)(q - p - 1);
+								if (n >= sizeof(uuid)) n = sizeof(uuid) - 1;
+								memcpy(uuid, p + 1, n);
+								uuid[n] = '\0';
+								p = q + 1;
+							}
+						}
+						if (*p == ',') p++;
+						int props = (int)strtol(p, &p, 10);
+
+						list = realloc(list,
+							sizeof(ble_gatt_char_t) * (app_resp->u.ble_char_list.count + 1));
+						if (!list) break;
+						ble_gatt_char_t *e = &list[app_resp->u.ble_char_list.count];
+						e->srv_idx = srv_idx;
+						e->char_idx = char_idx;
+						e->props = (uint8_t)props;
+						snprintf(e->uuid, sizeof(e->uuid), "%s", uuid);
+						e->value_len = 0;
+						e->value_hex[0] = '\0';
+						e->value_str[0] = '\0';
+						app_resp->u.ble_char_list.count++;
+						index = eol;
+					}
+					app_resp->u.ble_char_list.out_list = list;
+					if (app_resp->u.ble_char_list.count > gatt_char_count_before)
+						gatt_added_or_updated = 1;
+				}
+				break;
+
+			case CTRL_RESP_BLE_GATT_READ:
+				/* +BLEGATTCRD:<idx>,<len>,<value_hex> */
+				{
+					char *p = strchr(index, ',');
+					if (p)
+					{
+						p++;
+						int len = (int)strtol(p, &p, 10);
+						if (*p == ',') p++;
+						char *eol = strstr(p, "\r\n");
+						size_t hex_len = eol ? (size_t)(eol - p) : strlen(p);
+						if (hex_len >= sizeof(app_resp->u.ble_read.value_hex))
+							hex_len = sizeof(app_resp->u.ble_read.value_hex) - 1;
+						memcpy(app_resp->u.ble_read.value_hex, p, hex_len);
+						app_resp->u.ble_read.value_hex[hex_len] = '\0';
+						app_resp->u.ble_read.value_len = (uint16_t)len;
+						gatt_added_or_updated = 1;
+					}
+				}
+				break;
 		} // switch (app_resp->msg_id)
 	} while (0);
 
-	if ( ap_count < app_resp->u.wifi_ap_scan.count )
+	if ( (app_resp->msg_id == CTRL_RESP_GET_AP_SCAN_LIST
+	   || app_resp->msg_id == CTRL_RESP_GET_BLE_SCAN_LIST)
+	  && ap_count < app_resp->u.wifi_ap_scan.count )
 	{
 		ret = SUCCESS;
 		app_resp->u.wifi_ap_scan.out_list = out_list; // Update
 	}
+	if (gatt_added_or_updated)
+		ret = SUCCESS;
 
 	return ret;
 } // uint8_t m1_parse_spi_at_resp(char *resp, const char *resp_key, ctrl_cmd_t *app_resp)

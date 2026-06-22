@@ -10,6 +10,7 @@
 #define __CTRL_API_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 //#define SUCCESS                             0 // Defined as enum in stm32h5xx.h
 #define SUCCESSOK							0
@@ -197,11 +198,16 @@ typedef enum _CtrlMsgId {
   CTRL_MSG_ID__Resp_BLEScanList = 226,
   CTRL_MSG_ID__Resp_BLEAdvertise = 227,
   CTRL_MSG_ID__Resp_BLEReset = 228,
+  CTRL_MSG_ID__Resp_BLEConnect = 229,        /* phase 2: GATT deep-probe */
+  CTRL_MSG_ID__Resp_BLEDisconnect = 230,
+  CTRL_MSG_ID__Resp_BLEGattPrimSrv = 231,
+  CTRL_MSG_ID__Resp_BLEGattChar = 232,
+  CTRL_MSG_ID__Resp_BLEGattRead = 233,
   /*
    * Add new control path command response before Resp_Max
    * and update Resp_Max
    */
-  CTRL_MSG_ID__Resp_Max = 229,
+  CTRL_MSG_ID__Resp_Max = 234,
   /*
    ** Event Msgs *
    */
@@ -329,6 +335,11 @@ typedef enum {
 	CTRL_RESP_GET_BLE_SCAN_LIST        	= CTRL_MSG_ID__Resp_BLEScanList,		//0x7e -> 0xe2
 	CTRL_RESP_SET_BLE_ADVERTISE        	= CTRL_MSG_ID__Resp_BLEAdvertise,		//0x7f -> 0xe3
 	CTRL_RESP_SET_BLE_RESET        		= CTRL_MSG_ID__Resp_BLEReset,			//0x80 -> 0xe4
+	CTRL_RESP_BLE_CONNECT				= CTRL_MSG_ID__Resp_BLEConnect,			/* phase 2 */
+	CTRL_RESP_BLE_DISCONNECT			= CTRL_MSG_ID__Resp_BLEDisconnect,
+	CTRL_RESP_BLE_GATT_PRIMSRV			= CTRL_MSG_ID__Resp_BLEGattPrimSrv,
+	CTRL_RESP_BLE_GATT_CHAR				= CTRL_MSG_ID__Resp_BLEGattChar,
+	CTRL_RESP_BLE_GATT_READ				= CTRL_MSG_ID__Resp_BLEGattRead,
 	/*
 	 * Add new control path comm       and response before Resp_Max
 	 * and update Resp_Max
@@ -504,6 +515,57 @@ typedef struct {
 	wifi_scanlist_t *out_list;
 } wifi_ap_scan_list_t;
 
+/* ---- BLE GATT deep-probe (phase 2) -------------------------------------- */
+
+#define BLE_GATT_UUID_STR_LEN     40   /* enough for "0xXXXX" or 36-char "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx" + NUL */
+#define BLE_GATT_VALUE_HEX_LEN    129  /* 64 bytes -> 128 hex chars + NUL */
+#define BLE_GATT_VALUE_STR_LEN    65   /* printable rendering of value */
+
+/* GATT properties bitmap (BLE core spec). */
+#define BLE_GATT_PROP_BROADCAST   0x01
+#define BLE_GATT_PROP_READ        0x02
+#define BLE_GATT_PROP_WRITE_NR    0x04  /* write without response */
+#define BLE_GATT_PROP_WRITE       0x08
+#define BLE_GATT_PROP_NOTIFY      0x10
+#define BLE_GATT_PROP_INDICATE    0x20
+#define BLE_GATT_PROP_AUTH_SW     0x40  /* auth signed write */
+#define BLE_GATT_PROP_EXT_PROPS   0x80
+
+typedef struct {
+	int srv_idx;
+	int srv_type;      /* 0 = primary, 1 = secondary */
+	char uuid[BLE_GATT_UUID_STR_LEN];
+} ble_gatt_srv_t;
+
+typedef struct {
+	int srv_idx;
+	int char_idx;
+	uint8_t props;
+	char uuid[BLE_GATT_UUID_STR_LEN];
+	uint16_t value_len;                       /* 0 if not yet read */
+	char value_hex[BLE_GATT_VALUE_HEX_LEN];   /* hex string, lowercase, no separator */
+	char value_str[BLE_GATT_VALUE_STR_LEN];   /* ASCII if printable, else empty */
+} ble_gatt_char_t;
+
+typedef struct {
+	int connect_status;     /* 0 = ok, non-zero = ESP-AT error code */
+} ble_gatt_conn_t;
+
+typedef struct {
+	int count;
+	ble_gatt_srv_t *out_list;
+} ble_gatt_srv_list_t;
+
+typedef struct {
+	int count;
+	ble_gatt_char_t *out_list;
+} ble_gatt_char_list_t;
+
+typedef struct {
+	uint16_t value_len;
+	char value_hex[BLE_GATT_VALUE_HEX_LEN];
+} ble_gatt_read_t;
+
 typedef struct {
 	int count;
 	/* dynamic list*/
@@ -605,6 +667,10 @@ typedef struct Ctrl_cmd_t {
 	union {
 		wifi_ap_scan_list_t         wifi_ap_scan;
 		wifi_ap_config_t            wifi_ap_config;
+		ble_gatt_conn_t             ble_conn;        /* phase 2 */
+		ble_gatt_srv_list_t         ble_srv_list;
+		ble_gatt_char_list_t        ble_char_list;
+		ble_gatt_read_t             ble_read;
 	}u;
 	/* Wait for timeout duration, if response not received,
 	 * it will send timeout response.

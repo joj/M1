@@ -32,6 +32,7 @@
 #include "esp_at_list.h"
 #include "m1_oui_lookup.h"
 #include "m1_ble_fingerprint.h"
+#include "m1_ble_probe_ui.h"
 
 /*************************** D E F I N E S ************************************/
 
@@ -55,6 +56,7 @@ void bluetooth_scan(void);
 void bluetooth_advertise(void);
 static uint8_t ble_scan_list_validation(ctrl_cmd_t *app_resp);
 static uint16_t ble_scan_list_print(ctrl_cmd_t *app_resp, bool up_dir);
+bool ble_scan_get_selected(char *bssid_out, size_t bssid_out_size, int *addr_type_out);
 //extern void ble_app_main(void);
 extern void  esp32_main_init(void);
 
@@ -176,6 +178,18 @@ void bluetooth_scan(void)
 				else if ( this_button_status.event[BUTTON_OK_KP_ID]==BUTTON_EVENT_CLICK ) // Select?
 				{
 					; // Do other things for this task, if needed
+				}
+				else if ( this_button_status.event[BUTTON_OK_KP_ID]==BUTTON_EVENT_LCLICK ) // Long-press OK: GATT deep-probe
+				{
+					char sel_bssid[BSSID_STR_SIZE];
+					int sel_addr_type = 0;
+					if ( list_count && ble_scan_get_selected(sel_bssid, sizeof(sel_bssid), &sel_addr_type) )
+					{
+						m1_ble_probe_ui_run(sel_bssid, sel_addr_type);
+						/* On return, redraw current scan entry. */
+						if ( list_count )
+							ble_scan_list_print(&app_req, true);
+					}
 				}
 			} // if ( q_item.q_evt_type==Q_EVENT_KEYPAD )
 			else
@@ -411,6 +425,21 @@ static uint8_t ble_scan_list_validation(ctrl_cmd_t *app_resp)
  * Return: number of devices found
  */
 /*============================================================================*/
+/* Currently-displayed item in the BLE scan list, exposed so the long-press
+ * handler can invoke the GATT deep-probe on the selected device.
+ */
+static const wifi_scanlist_t *g_ble_scan_selected = NULL;
+static int                    g_ble_scan_selected_addr_type = 0;
+
+bool ble_scan_get_selected(char *bssid_out, size_t bssid_out_size, int *addr_type_out)
+{
+	if (!g_ble_scan_selected) return false;
+	if (bssid_out && bssid_out_size)
+		snprintf(bssid_out, bssid_out_size, "%s", (const char *)g_ble_scan_selected->bssid);
+	if (addr_type_out) *addr_type_out = g_ble_scan_selected_addr_type;
+	return true;
+}
+
 static uint16_t ble_scan_list_print(ctrl_cmd_t *app_resp, bool up_dir)
 {
 	static uint16_t i;
@@ -511,6 +540,9 @@ static uint16_t ble_scan_list_print(ctrl_cmd_t *app_resp, bool up_dir)
 	}
 
 	m1_u8g2_nextpage(); // Update display RAM
+
+	g_ble_scan_selected = &list[i];
+	g_ble_scan_selected_addr_type = list[i].encryption_mode;
 
 	M1_LOG_D(M1_LOGDB_TAG, "%d) bssid \"%s\" rssi \"%d\" address type \"%d\" \n\r",\
 						i, list[i].bssid, list[i].rssi, list[i].encryption_mode);

@@ -370,6 +370,9 @@ target_sources(m1_01 INTERFACE
     ../../m1_csrc/m1_nfc.c
     ../../m1_csrc/m1_oui_lookup.c
     ../../m1_csrc/m1_ble_fingerprint.c
+    ../../m1_csrc/m1_ble_uuid_names.c
+    ../../m1_csrc/m1_ble_gatt.c
+    ../../m1_csrc/m1_ble_probe_ui.c
     ../../m1_csrc/m1_power_ctl.c
     ../../m1_csrc/m1_rf_spi.c
     ../../m1_csrc/m1_rfid.c

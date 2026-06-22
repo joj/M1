@@ -942,3 +942,165 @@ uint8_t esp_dev_reset(ctrl_cmd_t *app_req)
 
 	return ret;
 } // uint8_t esp_dev_reset(ctrl_cmd_t *app_req)
+
+
+
+/* ============================================================================
+ * Phase 2 — BLE GATT client wrappers.
+ *
+ * Shared helper: send an AT command and pump responses until a terminal line
+ * (cmd_resp) appears or the timeout expires. Each non-terminal line that
+ * contains the response key prefix is passed to m1_parse_spi_at_resp(),
+ * which dispatches on app_req->msg_id and populates app_req->u.* incrementally.
+ * ============================================================================ */
+
+static uint8_t at_send_and_collect(ctrl_cmd_t *app_req,
+                                   const char *resp_key,
+                                   const char *terminator)
+{
+    char *rx_buf = NULL;
+    char *resp_buf = NULL;
+    int rx_buf_len = 0;
+    uint32_t rx_uid;
+    uint8_t ret;
+    uint32_t tick_t0, tick_pass;
+
+    tick_t0 = HAL_GetTick();
+    esp_queue_reset(ctrl_msg_Q);
+    app_req->cmd_resp = strdup(terminator);
+    app_req->cmd_len = strlen(app_req->at_cmd);
+
+    ret = spi_AT_app_send_command(app_req);
+    if (ret == SUCCESS)
+    {
+        ret = ERROR;
+        while (true)
+        {
+            tick_pass = HAL_GetTick() - tick_t0;
+            tick_pass /= MILLISEC_TO_SEC;
+            if (tick_pass)
+            {
+                tick_t0 += MILLISEC_TO_SEC;
+                if (app_req->cmd_timeout_sec > tick_pass)
+                    app_req->cmd_timeout_sec -= tick_pass;
+                else
+                    break; /* timeout */
+            }
+            esp_free_mem(&resp_buf);
+            rx_buf = spi_AT_app_get_response(&rx_buf_len, &rx_uid,
+                                             app_req->cmd_timeout_sec);
+            resp_buf = rx_buf;
+            if (!rx_buf || !rx_buf_len)
+                continue;
+            if (rx_uid != current_uid)
+                continue;
+            /* Try to parse any matching-key lines into typed payload. */
+            if (resp_key)
+                m1_parse_spi_at_resp(rx_buf, resp_key, app_req);
+            /* Look for the terminal "OK" line (possibly with CR/LF noise). */
+            char *stripped = m1_resp_string_strip(rx_buf, CR_LF);
+            if (stripped && strstr(stripped, terminator))
+            {
+                ret = SUCCESS;
+                break;
+            }
+        }
+    }
+    esp_free_mem(&resp_buf);
+    esp_free_mem(&app_req->at_cmd);
+    esp_free_mem(&app_req->cmd_resp);
+    if (ret == SUCCESS)
+    {
+        app_req->msg_type = CTRL_RESP;
+        app_req->resp_event_status = SUCCESS;
+    }
+    return ret;
+}
+
+
+uint8_t ble_gatt_connect(ctrl_cmd_t *app_req,
+                         int conn_idx,
+                         const char *bssid,
+                         int addr_type,
+                         int timeout_sec)
+{
+    char buf[96];
+    int n = snprintf(buf, sizeof(buf), "%s%d,\"%s\",%d,%d%s",
+                     ESP32C6_AT_REQ_BLE_CONN,
+                     conn_idx, bssid ? bssid : "", addr_type, timeout_sec,
+                     ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(buf))
+        return ERROR;
+    app_req->at_cmd = strdup(buf);
+    app_req->msg_id = CTRL_RESP_BLE_CONNECT;
+    /* Initialise typed payload. */
+    app_req->u.ble_conn.connect_status = -1;
+    return at_send_and_collect(app_req, ESP32C6_AT_RES_BLE_CONN_KEY,
+                               ESP32C6_AT_RES_OK);
+}
+
+
+uint8_t ble_gatt_disconnect(ctrl_cmd_t *app_req, int conn_idx)
+{
+    char buf[40];
+    int n = snprintf(buf, sizeof(buf), "%s%d%s",
+                     ESP32C6_AT_REQ_BLE_DISCONN, conn_idx,
+                     ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(buf))
+        return ERROR;
+    app_req->at_cmd = strdup(buf);
+    app_req->msg_id = CTRL_RESP_BLE_DISCONNECT;
+    return at_send_and_collect(app_req, NULL, ESP32C6_AT_RES_OK);
+}
+
+
+uint8_t ble_gatt_primsrv(ctrl_cmd_t *app_req, int conn_idx)
+{
+    char buf[40];
+    int n = snprintf(buf, sizeof(buf), "%s%d%s",
+                     ESP32C6_AT_REQ_BLE_PRIMSRV, conn_idx,
+                     ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(buf))
+        return ERROR;
+    app_req->at_cmd = strdup(buf);
+    app_req->msg_id = CTRL_RESP_BLE_GATT_PRIMSRV;
+    app_req->u.ble_srv_list.count = 0;
+    app_req->u.ble_srv_list.out_list = NULL;
+    return at_send_and_collect(app_req, ESP32C6_AT_RES_BLE_PRIMSRV_KEY,
+                               ESP32C6_AT_RES_OK);
+}
+
+
+uint8_t ble_gatt_chars(ctrl_cmd_t *app_req, int conn_idx, int srv_idx)
+{
+    char buf[48];
+    int n = snprintf(buf, sizeof(buf), "%s%d,%d%s",
+                     ESP32C6_AT_REQ_BLE_GATTCHAR, conn_idx, srv_idx,
+                     ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(buf))
+        return ERROR;
+    app_req->at_cmd = strdup(buf);
+    app_req->msg_id = CTRL_RESP_BLE_GATT_CHAR;
+    app_req->u.ble_char_list.count = 0;
+    app_req->u.ble_char_list.out_list = NULL;
+    return at_send_and_collect(app_req, ESP32C6_AT_RES_BLE_GATTCHAR_KEY,
+                               ESP32C6_AT_RES_OK);
+}
+
+
+uint8_t ble_gatt_read(ctrl_cmd_t *app_req, int conn_idx,
+                      int srv_idx, int char_idx)
+{
+    char buf[48];
+    int n = snprintf(buf, sizeof(buf), "%s%d,%d,%d%s",
+                     ESP32C6_AT_REQ_BLE_GATTRD, conn_idx, srv_idx, char_idx,
+                     ESP32C6_AT_REQ_CRLF);
+    if (n <= 0 || (size_t)n >= sizeof(buf))
+        return ERROR;
+    app_req->at_cmd = strdup(buf);
+    app_req->msg_id = CTRL_RESP_BLE_GATT_READ;
+    app_req->u.ble_read.value_len = 0;
+    app_req->u.ble_read.value_hex[0] = '\0';
+    return at_send_and_collect(app_req, ESP32C6_AT_RES_BLE_GATTRD_KEY,
+                               ESP32C6_AT_RES_OK);
+}

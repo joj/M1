@@ -31,6 +31,7 @@ See [HARDWARE.md](HARDWARE.md) for more details.
 - [Architecture](ARCHITECTURE.md) – Project structure
 - [Development](DEVELOPMENT.md) – Development guidelines
 - [OUI/BLE Device Identification](documentation/oui_database.md) – MAC vendor lookup and BLE fingerprinting on scan views
+- [BLE GATT Deep-Probe](documentation/ble_gatt_probe.md) – Long-press OK on a scanned BLE device to read its DIS and walk its services
 
 ## Building
 

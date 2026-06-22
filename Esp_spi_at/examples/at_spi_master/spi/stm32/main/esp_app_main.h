@@ -23,4 +23,21 @@ uint8_t ble_scan_list(ctrl_cmd_t *app_req);
 uint8_t ble_advertise(ctrl_cmd_t *app_req);
 uint8_t esp_dev_reset(ctrl_cmd_t *app_req);
 
+/* Phase 2 — BLE GATT client wrappers.
+ *
+ * Each function builds an AT command and waits synchronously for the
+ * response. The typed result is written into app_req->u (and any allocated
+ * lists must be freed by the caller). cmd_timeout_sec on the request bounds
+ * the wait.
+ */
+uint8_t ble_gatt_connect(ctrl_cmd_t *app_req,
+                         int conn_idx,
+                         const char *bssid,
+                         int addr_type,
+                         int timeout_sec);
+uint8_t ble_gatt_disconnect(ctrl_cmd_t *app_req, int conn_idx);
+uint8_t ble_gatt_primsrv(ctrl_cmd_t *app_req, int conn_idx);
+uint8_t ble_gatt_chars(ctrl_cmd_t *app_req, int conn_idx, int srv_idx);
+uint8_t ble_gatt_read(ctrl_cmd_t *app_req, int conn_idx, int srv_idx, int char_idx);
+
 #endif /* ESP_APP_MAIN_H_ */

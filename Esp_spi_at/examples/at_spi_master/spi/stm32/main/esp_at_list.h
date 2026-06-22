@@ -43,6 +43,25 @@
 #define ESP32C6_AT_REQ_ADVERTISE		"AT+BLEADVDATAEX=" // AT+BLEADVDATAEX=<dev_name>,<uuid>,<manufacturer_data>,<include_power>
 #define ESP32C6_AT_REQ_ADV_DATA			"\"MONSTATEK-M1\",\"A000\",\"1A2B3C4D5E\",1"
 
+/* BLE GATT client commands (phase 2 deep-probe).
+ *   AT+BLECONN=<conn_idx>,"<addr>",<addr_type>,<timeout>      -> +BLECONN:<idx>,<status>
+ *   AT+BLEDISCONN=<conn_idx>                                  -> OK / +BLEDISCONN:<idx>,"<addr>"
+ *   AT+BLEGATTCPRIMSRV=<conn_idx>                             -> +BLEGATTCPRIMSRV:<idx>,<srv_idx>,<uuid>,<srv_type>
+ *   AT+BLEGATTCCHAR=<conn_idx>,<srv_idx>                      -> +BLEGATTCCHAR:<idx>,"char",<srv_idx>,<char_idx>,<uuid>,<props>
+ *                                                             -> +BLEGATTCCHAR:<idx>,"desc",<srv_idx>,<char_idx>,<desc_idx>,<uuid>
+ *   AT+BLEGATTCRD=<conn_idx>,<srv_idx>,<char_idx>[,<desc_idx>] -> +BLEGATTCRD:<idx>,<len>,<value_hex>
+ */
+#define ESP32C6_AT_REQ_BLE_CONN			"AT+BLECONN="
+#define ESP32C6_AT_REQ_BLE_DISCONN		"AT+BLEDISCONN="
+#define ESP32C6_AT_REQ_BLE_PRIMSRV		"AT+BLEGATTCPRIMSRV="
+#define ESP32C6_AT_REQ_BLE_GATTCHAR		"AT+BLEGATTCCHAR="
+#define ESP32C6_AT_REQ_BLE_GATTRD		"AT+BLEGATTCRD="
+
+#define ESP32C6_AT_RES_BLE_CONN_KEY		"+BLECONN:"
+#define ESP32C6_AT_RES_BLE_PRIMSRV_KEY	"+BLEGATTCPRIMSRV:"
+#define ESP32C6_AT_RES_BLE_GATTCHAR_KEY	"+BLEGATTCCHAR:"
+#define ESP32C6_AT_RES_BLE_GATTRD_KEY	"+BLEGATTCRD:"
+
 #define ESP32C6_AT_RESET				"AT+RST"
 
 #endif /* ESP32C6_AT_LIST_H_ */
