@@ -27,6 +27,7 @@ See [HARDWARE.md](HARDWARE.md) for more details.
 
 ## Documentation
 
+- **[User Manual](documentation/USER_MANUAL.md)** – tour of every new UI feature (start here)
 - [Build Tool (mbt)](documentation/mbt.md) – Build with STM32CubeIDE or VS Code
 - [Architecture](ARCHITECTURE.md) – Project structure
 - [Development](DEVELOPMENT.md) – Development guidelines
