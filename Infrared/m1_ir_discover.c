@@ -28,7 +28,9 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 
 #include "stm32h5xx_hal.h"
 #include "main.h"
@@ -57,6 +59,114 @@
  * the pointer passed to ir_set_db_path_override() remains valid for
  * the lifetime of the button-grid call. */
 static char s_locked_path[80];
+
+/* Brand picker state. Brand = filename prefix before the first '_'
+ * (e.g. "Samsung" in "Samsung_AA59-00714A.ir"). */
+#define MAX_BRANDS 128
+#define BRAND_LEN  20
+#define PICK_ROWS  5
+static char s_brands[MAX_BRANDS][BRAND_LEN];
+static int  s_brand_count;
+
+static void brand_of(const char *fname, char *out, size_t outsz)
+{
+	size_t i = 0;
+	while (fname[i] && fname[i] != '_' && i + 1 < outsz)
+	{
+		out[i] = fname[i];
+		i++;
+	}
+	out[i] = 0;
+}
+
+static int brand_cmp(const void *a, const void *b)
+{
+	return strcasecmp((const char *)a, (const char *)b);
+}
+
+/* Scan directory, collect unique brand prefixes, sort. */
+static bool collect_brands(const char *dir)
+{
+	s_brand_count = 0;
+	DIR d;
+	if (f_opendir(&d, dir) != FR_OK) return false;
+	FILINFO fi;
+	while (f_readdir(&d, &fi) == FR_OK && fi.fname[0])
+	{
+		if (fi.fattrib & (AM_DIR | AM_HID | AM_SYS)) continue;
+		size_t n = strlen(fi.fname);
+		if (n < 4 || strcasecmp(&fi.fname[n - 3], ".ir") != 0) continue;
+		char brand[BRAND_LEN];
+		brand_of(fi.fname, brand, sizeof(brand));
+		if (!brand[0]) continue;
+		bool dup = false;
+		for (int i = 0; i < s_brand_count; i++)
+			if (!strcasecmp(s_brands[i], brand)) { dup = true; break; }
+		if (dup) continue;
+		if (s_brand_count >= MAX_BRANDS) break;
+		snprintf(s_brands[s_brand_count++], BRAND_LEN, "%s", brand);
+	}
+	f_closedir(&d);
+	qsort(s_brands, s_brand_count, BRAND_LEN, brand_cmp);
+	return s_brand_count > 0;
+}
+
+static void draw_picker(const char *header, int cursor, int top)
+{
+	int total = s_brand_count + 1;  /* +1 for "<All brands>" */
+	m1_u8g2_firstpage();
+	u8g2_SetFont(&m1_u8g2, M1_DISP_MAIN_MENU_FONT_N);
+	u8g2_DrawXBMP(&m1_u8g2, 0, 0, 128, 14, m1_frame_128_14);
+	u8g2_DrawStr(&m1_u8g2, 2, ROW_H, header);
+	for (int r = 0; r < PICK_ROWS; r++)
+	{
+		int idx = top + r;
+		if (idx >= total) break;
+		const char *label = (idx == 0) ? "<All brands>" : s_brands[idx - 1];
+		int y = 14 + ROW_H + r * ROW_H;
+		if (idx == cursor)
+			u8g2_DrawStr(&m1_u8g2, 2, y, ">");
+		u8g2_DrawStr(&m1_u8g2, 10, y, label);
+	}
+	m1_u8g2_nextpage();
+}
+
+/* Returns 0 = aborted, 1 = chosen. Writes brand into out_brand
+ * (empty string = All brands). */
+static int pick_brand(const char *header, char *out_brand, size_t outsz)
+{
+	int cursor = 0, top = 0;
+	int total  = s_brand_count + 1;
+	draw_picker(header, cursor, top);
+
+	for (;;)
+	{
+		S_M1_Main_Q_t q;
+		if (xQueueReceive(main_q_hdl, &q, portMAX_DELAY) != pdTRUE) continue;
+		if (q.q_evt_type != Q_EVENT_KEYPAD) continue;
+		S_M1_Buttons_Status b;
+		if (xQueueReceive(button_events_q_hdl, &b, 0) != pdTRUE) continue;
+		if (b.event[BUTTON_BACK_KP_ID] == BUTTON_EVENT_CLICK) return 0;
+		if (b.event[BUTTON_OK_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (cursor == 0) out_brand[0] = 0;
+			else snprintf(out_brand, outsz, "%s", s_brands[cursor - 1]);
+			return 1;
+		}
+		bool moved = false;
+		if (b.event[BUTTON_UP_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (cursor > 0) { cursor--; moved = true; }
+			if (cursor < top) top = cursor;
+		}
+		if (b.event[BUTTON_DOWN_KP_ID] == BUTTON_EVENT_CLICK)
+		{
+			if (cursor + 1 < total) { cursor++; moved = true; }
+			if (cursor >= top + PICK_ROWS) top = cursor - PICK_ROWS + 1;
+		}
+		if (moved) draw_picker(header, cursor, top);
+	}
+}
 
 /* From m1_ir_remotes.c — extern declarations to access the shared
  * payload + protocol mapping and trigger transmission. */
@@ -203,6 +313,19 @@ static void discover_run(uint8_t remote_type)
 		goto wait_back;
 	}
 
+	/* Brand picker: extract unique prefixes, let user filter. */
+	if (!collect_brands(dir))
+	{
+		draw_screen(header, "No models found:", dir + 2, "BACK to return");
+		goto wait_back;
+	}
+	char brand_filter[BRAND_LEN] = "";
+	if (!pick_brand(header, brand_filter, sizeof(brand_filter)))
+	{
+		xQueueReset(main_q_hdl);
+		return;
+	}
+
 	DIR d;
 	if (f_opendir(&d, dir) != FR_OK)
 	{
@@ -211,7 +334,10 @@ static void discover_run(uint8_t remote_type)
 	}
 
 	infrared_encode_sys_init();
-	draw_screen(header, "Cycling models...", "OK = lock", "BACK = abort");
+	if (brand_filter[0])
+		draw_screen(header, "Cycling models...", brand_filter, "OK=lock BACK=quit");
+	else
+		draw_screen(header, "Cycling models...", "OK = lock", "BACK = abort");
 
 	FILINFO fi;
 	bool aborted = false;
@@ -230,6 +356,12 @@ static void discover_run(uint8_t remote_type)
 		size_t n = strlen(fi.fname);
 		if (n < 4 || strcasecmp(&fi.fname[n - 3], ".ir") != 0)
 			continue;
+		if (brand_filter[0])
+		{
+			char fb[BRAND_LEN];
+			brand_of(fi.fname, fb, sizeof(fb));
+			if (strcasecmp(fb, brand_filter) != 0) continue;
+		}
 
 		char path[100];
 		snprintf(path, sizeof(path), "%s/%s", dir, fi.fname);

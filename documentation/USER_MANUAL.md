@@ -232,12 +232,15 @@ The fastest way to drive your TV/AV/projector/AC:
 
 1. Point the M1 at the target.
 2. *Menu → Infrared → Find My Remote → Find My TV*.
-3. The M1 cycles through every per-model `.ir` file in
-   `/INFRARED/browse/TVs/` (typically ~400), firing one Power code
-   from each every ~250 ms. The screen ticks `<n>: <model>` as it
-   goes.
-4. The moment your TV reacts — **press OK**.
-5. The M1 locks that model, saves it as `Last TV`, and brings up
+3. **Brand picker** — UP/DOWN to scroll, OK to confirm.
+   Pick a specific brand (Samsung, Sony, LG, …) to narrow the
+   search to that brand's models only, or pick *<All brands>*
+   at the top to walk every model.
+4. The M1 cycles through every matching per-model `.ir` file in
+   `/INFRARED/browse/TVs/`, firing one Power code from each every
+   ~250 ms. The screen ticks `<n>: <model>` as it goes.
+5. The moment your TV reacts — **press OK**.
+6. The M1 locks that model, saves it as `Last TV`, and brings up
    the full button grid (Power / Mute / Vol± / Ch±) for that
    specific remote model. From there it's a regular remote.
 
