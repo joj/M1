@@ -87,6 +87,27 @@ IEEE publishes new OUI assignments roughly every few days. Re-run
 `scripts/build_oui_db.py` whenever you want a fresh snapshot and overwrite
 the file on the SD card.
 
+## Staging firmware + DB onto the SD card (Windows)
+
+`scripts/flash_to_sd.bat` automates the whole copy-to-SD step. Run it from
+the repo root in a Command Prompt or PowerShell:
+
+```
+scripts\flash_to_sd.bat E:
+```
+
+(replace `E:` with whatever drive letter your SD card mounted as). It will:
+
+1. Verify `artifacts/MonstaTek_M1_v0800_wCRC.bin` exists (built by `make`).
+2. Build `oui.bin` via `scripts/build_oui_db.py` if you don't already have
+   one (needs Python and network access).
+3. Copy the firmware to the SD root and `oui.bin` to `<SD>\databases\`.
+
+Pass `--no-oui` to skip the database step (firmware only).
+
+Then on the M1: **Menu → Firmware Update →
+MonstaTek_M1_v0800_wCRC.bin**.
+
 ## Testing the BLE fingerprinter on your host
 
 A standalone host test compiles `m1_ble_fingerprint.c` without any STM32
